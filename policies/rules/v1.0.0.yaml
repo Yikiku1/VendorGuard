@@ -1,0 +1,243 @@
+schema_version: '1.0'
+policy_id: vendorguard_mvp_rules
+version: 1.0.0
+status: approved
+effective_from: '2026-09-01'
+effective_until: null
+simulation_only: true
+description: VendorGuard 一期教学演示规则。阈值不代表任何真实企业采购、质量或合规政策。
+source_document: project_docs/VendorGuard-规则测试表.md
+
+implementation_scope:
+  status: scoped_for_10_day_mvp
+  enabled_rule_ids:
+  - VEN-001
+  - VEN-002
+  - VEN-004
+  - VEN-005
+  - PR-001
+  deferred_rule_ids:
+  - VEN-003
+  - VEN-006
+  notes:
+  - 七条规则均保留为领域设计，但只有 enabled_rule_ids 进入本期实现与验收。
+  - VEN-003 与 VEN-006 依赖质量经理流程和双人审批，延期到一期交付后。
+
+evaluation_contract:
+  allowed_operators:
+  - equals
+  - in
+  - less_than
+  - greater_than
+  allowed_actions:
+  - block
+  - request_documents
+  - require_manual_verification
+  - require_approval
+  - require_exception_approval
+  - create_manual_review
+  rule_results:
+  - hit
+  - not_hit
+  - not_applicable
+  decimal_comparison: 使用未四舍五入的十进制定点值比较，展示时才格式化。
+  date_boundary: valid_until 当天仍有效，评估日期晚于 valid_until 才算过期。
+  missing_prerequisite: 不产生 not_hit，按规则配置创建补件或人工复核项。
+  approval_merge: 多条命中规则要求相同角色时按角色去重。
+
+rules:
+- id: VEN-001
+  name: 营业执照材料异常
+  scopes:
+  - supplier_admission
+  input_fields:
+  - business_license_document_status
+  condition:
+    field: business_license_document_status
+    operator: in
+    value:
+    - expired
+    - inconsistent
+    - unreadable
+  hit_outcome:
+    type: route_by_field_value
+    routes:
+      expired:
+        action: request_documents
+        blocking: true
+        target_case_status: pending_documents
+        reason_code: business_license_expired
+      inconsistent:
+        action: require_manual_verification
+        blocking: false
+        reason_code: business_license_inconsistent
+      unreadable:
+        action: request_documents
+        blocking: true
+        target_case_status: pending_documents
+        reason_code: business_license_unreadable
+  on_missing_input:
+    action: request_documents
+    reason_code: business_license_missing
+  evidence_requirements:
+  - document_type: business_license
+    location_type: page
+
+- id: VEN-002
+  name: 品类必填材料缺失
+  scopes:
+  - supplier_admission
+  input_fields:
+  - category_required_documents_complete
+  condition:
+    field: category_required_documents_complete
+    operator: equals
+    value: false
+  hit_outcome:
+    action: request_documents
+    target_case_status: pending_documents
+    reason_code: category_required_documents_missing
+  on_missing_input:
+    action: create_manual_review
+    reason_code: document_completeness_unknown
+  evidence_requirements:
+  - fact_type: required_document_types
+  - fact_type: provided_document_types
+
+- id: VEN-003
+  name: 质量证书剩余不足 90 天
+  scopes:
+  - supplier_admission
+  input_fields:
+  - quality_certificate_remaining_days
+  condition:
+    field: quality_certificate_remaining_days
+    operator: less_than
+    value: 90
+    value_type: integer_days
+  hit_outcome:
+    action: require_approval
+    required_roles:
+    - quality_manager
+    reason_code: quality_certificate_expiring_soon
+  on_missing_input:
+    action: request_documents
+    handled_with_rule_id: VEN-002
+    reason_code: quality_certificate_missing
+  evidence_requirements:
+  - document_type: quality_certificate
+    location_type: page
+  notes:
+  - 负数同样命中，表示声明有效期已经结束；一期仍由质量经理复核。
+
+- id: VEN-004
+  name: 可比报价高于基准价 20%
+  scopes:
+  - supplier_admission
+  input_fields:
+  - quote_is_comparable
+  - quote_deviation_percent
+  preconditions:
+    all:
+    - field: quote_is_comparable
+      operator: equals
+      value: true
+  on_precondition_failed:
+    action: create_manual_review
+    reason_code: quote_not_comparable
+  condition:
+    field: quote_deviation_percent
+    operator: greater_than
+    value: 20
+    value_type: decimal_percent
+  hit_outcome:
+    action: require_approval
+    required_roles:
+    - procurement_manager
+    reason_code: quote_deviation_above_threshold
+  on_missing_input:
+    action: create_manual_review
+    reason_code: quote_comparison_data_missing
+  evidence_requirements:
+  - document_type: quotation
+    location_type: cell_range
+  - fact_type: baseline_price
+
+- id: VEN-005
+  name: 准时交付率低于 90%
+  scopes:
+  - supplier_admission
+  input_fields:
+  - delivery_history_is_sufficient
+  - on_time_delivery_rate
+  preconditions:
+    all:
+    - field: delivery_history_is_sufficient
+      operator: equals
+      value: true
+  on_precondition_failed:
+    action: create_manual_review
+    reason_code: delivery_history_insufficient
+  condition:
+    field: on_time_delivery_rate
+    operator: less_than
+    value: 90
+    value_type: decimal_percent
+  hit_outcome:
+    action: require_approval
+    required_roles:
+    - procurement_manager
+    reason_code: on_time_delivery_rate_below_threshold
+  on_missing_input:
+    action: create_manual_review
+    reason_code: delivery_history_missing
+  evidence_requirements:
+  - document_type: delivery_history
+    location_type: row_range
+
+- id: VEN-006
+  name: 关键物料双审批
+  scopes:
+  - supplier_admission
+  - procurement_exception
+  input_fields:
+  - category
+  condition:
+    field: category
+    operator: equals
+    value: critical_material
+  hit_outcome:
+    action: require_approval
+    required_roles:
+    - procurement_manager
+    - quality_manager
+    reason_code: critical_material_dual_approval
+  on_missing_input:
+    action: create_manual_review
+    reason_code: material_category_missing
+  evidence_requirements:
+  - fact_type: material_category
+
+- id: PR-001
+  name: 非 AVL 供应商采购例外
+  scopes:
+  - procurement_exception
+  input_fields:
+  - supplier_is_in_avl
+  condition:
+    field: supplier_is_in_avl
+    operator: equals
+    value: false
+  hit_outcome:
+    action: require_exception_approval
+    required_roles:
+    - procurement_manager
+    bind_to: purchase_requisition
+    reusable_for_other_prs: false
+    reason_code: supplier_not_in_avl
+  on_missing_input:
+    action: block
+    reason_code: avl_projection_unavailable
+  evidence_requirements:
+  - fact_type: supplier_eligibility_snapshot
+  - fact_type: avl_projection_result

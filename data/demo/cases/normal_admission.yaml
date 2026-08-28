@@ -1,0 +1,138 @@
+schema_version: '1.1'
+case_id: demo-admission-normal-001
+case_type: supplier_admission
+name: 正常准入
+fixture_status: defined_only
+synthetic_data: true
+purpose: 验证三种固定模板解析、五条启用规则均不命中、采购经理批准后供应商进入 AVL。
+reference_date: '2026-09-01'
+
+actors:
+  submitter:
+    user_id: user-procurement-specialist-demo
+    display_name: 演示采购专员
+    role: procurement_specialist
+  approver:
+    user_id: user-procurement-manager-demo
+    display_name: 演示采购经理
+    role: procurement_manager
+
+supplier:
+  supplier_id: supplier-demo-normal-001
+  display_name: 示例恒达工业部件有限公司
+  declared_registration_id: DEMO-NORMAL-001
+  initial_eligibility_status: candidate
+  category:
+    code: standard_components
+    name: 普通工业部件
+
+input_documents:
+- document_id: doc-demo-normal-license
+  type: business_license
+  file_name: normal_business_license.pdf
+  format: pdf
+  template_id: demo_business_license_v1
+  expected_source_locations:
+  - page:1
+- document_id: doc-demo-normal-quote
+  type: quotation
+  file_name: normal_quotation.xlsx
+  format: xlsx
+  template_id: demo_quotation_v1
+  expected_source_locations:
+  - 报价!A2:H2
+- document_id: doc-demo-normal-delivery
+  type: delivery_history
+  file_name: normal_delivery_history.csv
+  format: csv
+  template_id: demo_delivery_history_v1
+  expected_source_locations:
+  - rows:2-21
+- document_id: doc-demo-normal-certificate
+  type: quality_certificate
+  file_name: normal_quality_certificate.pdf
+  format: pdf
+  parsing_mode: metadata_only
+  expected_source_locations:
+  - attachment
+
+structured_facts:
+  business_license_document_status: valid
+  category_required_documents_complete: true
+  quote_is_comparable: true
+  quote_deviation_percent: 8.0
+  delivery_history_is_sufficient: true
+  on_time_delivery_rate: 96.0
+  supplier_is_in_avl: false
+  sources:
+    business_license_document_status: doc-demo-normal-license@page:1
+    quote_deviation_percent: doc-demo-normal-quote@报价!A2:H2
+    on_time_delivery_rate: doc-demo-normal-delivery@rows:2-21
+
+rule_evaluation:
+  enabled_rule_ids:
+  - VEN-001
+  - VEN-002
+  - VEN-004
+  - VEN-005
+  results:
+  - rule_id: VEN-001
+    result: not_hit
+  - rule_id: VEN-002
+    result: not_hit
+  - rule_id: VEN-004
+    result: not_hit
+  - rule_id: VEN-005
+    result: not_hit
+  deferred_rule_ids:
+  - VEN-003
+  - VEN-006
+  not_applicable_rule_ids:
+  - PR-001
+  expected_rule_hits: []
+
+evidence_review:
+  evidence_sufficiency: sufficient
+  expected_reference:
+    document_key: demo_supplier_admission_policy_v1
+    section: normal_admission
+
+approval:
+  required_role: procurement_manager
+  assignee_user_id: user-procurement-manager-demo
+  submitter_cannot_approve: true
+  expected_decision: approved
+
+expected_state_transitions:
+  admission_case:
+  - draft
+  - analyzing
+  - evidence_reviewing
+  - pending_approval
+  - approved
+  supplier_eligibility:
+  - candidate
+  - approved
+  workflow_run:
+  - queued
+  - running
+  - succeeded
+
+expected_final_state:
+  admission_case_status: approved
+  supplier_eligibility_status: approved
+  supplier_is_in_avl: true
+
+expected_audit_event_types:
+- admission_case_created
+- documents_registered
+- workflow_started
+- rules_evaluated
+- evidence_reviewed
+- decision_recorded
+- supplier_eligibility_changed
+
+honest_scope_notes:
+- PDF、XLSX、CSV 各只支持上述固定模板，未知模板必须明确拒绝。
+- 质量证书只保存附件元数据，本期不实现通用证书解析或真实性验证。
+- 质量经理和管理员角色已定义但不参与本案例。

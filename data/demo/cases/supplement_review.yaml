@@ -1,0 +1,152 @@
+schema_version: '1.1'
+case_id: demo-admission-supplement-001
+case_type: supplier_admission
+name: 补件后复核
+fixture_status: defined_only
+synthetic_data: true
+purpose: 验证首次缺件进入 pending_documents，补件后保留 VEN-002 历史命中，并由采购经理复核 VEN-004 报价风险。
+reference_date: '2026-09-01'
+
+actors:
+  submitter:
+    user_id: user-procurement-specialist-demo
+    display_name: 演示采购专员
+    role: procurement_specialist
+  approver:
+    user_id: user-procurement-manager-demo
+    display_name: 演示采购经理
+    role: procurement_manager
+
+supplier:
+  supplier_id: supplier-demo-supplement-001
+  display_name: 示例宏远工业紧固件有限公司
+  declared_registration_id: DEMO-SUPPLEMENT-001
+  initial_eligibility_status: candidate
+  category:
+    code: standard_fasteners
+    name: 普通工业紧固件
+
+input_documents:
+- document_id: doc-demo-supplement-license
+  type: business_license
+  file_name: supplement_business_license.pdf
+  format: pdf
+  template_id: demo_business_license_v1
+  submitted_in_stage: initial_submission
+  expected_source_locations:
+  - page:1
+- document_id: doc-demo-supplement-quote
+  type: quotation
+  file_name: supplement_quotation.xlsx
+  format: xlsx
+  template_id: demo_quotation_v1
+  submitted_in_stage: initial_submission
+  expected_source_locations:
+  - 报价!A2:H2
+- document_id: doc-demo-supplement-delivery
+  type: delivery_history
+  file_name: supplement_delivery_history.csv
+  format: csv
+  template_id: demo_delivery_history_v1
+  submitted_in_stage: initial_submission
+  expected_source_locations:
+  - rows:2-21
+- document_id: doc-demo-supplement-certificate
+  type: quality_certificate
+  file_name: supplement_quality_certificate.pdf
+  format: pdf
+  parsing_mode: metadata_only
+  submitted_in_stage: supplemental_submission
+  expected_source_locations:
+  - attachment
+
+initial_submission:
+  category_required_documents_complete: false
+  missing_required_document_types:
+  - quality_certificate
+  expected_rule_results:
+  - rule_id: VEN-002
+    result: hit
+    action: request_documents
+  expected_case_status: pending_documents
+
+after_supplement:
+  category_required_documents_complete: true
+  structured_facts:
+    business_license_document_status: valid
+    quote_is_comparable: true
+    quote_deviation_percent: 25.0
+    delivery_history_is_sufficient: true
+    on_time_delivery_rate: 95.0
+  sources:
+    business_license_document_status: doc-demo-supplement-license@page:1
+    quote_deviation_percent: doc-demo-supplement-quote@报价!A2:H2
+    on_time_delivery_rate: doc-demo-supplement-delivery@rows:2-21
+  expected_rule_results:
+  - rule_id: VEN-001
+    result: not_hit
+  - rule_id: VEN-002
+    result: not_hit
+  - rule_id: VEN-004
+    result: hit
+    action: require_approval
+    required_roles:
+    - procurement_manager
+  - rule_id: VEN-005
+    result: not_hit
+  expected_rule_hits:
+  - VEN-004
+  historical_rule_hits_retained:
+  - VEN-002
+
+evidence_review:
+  evidence_sufficiency: sufficient
+  risk_id: risk-demo-supplement-quote
+  rule_id: VEN-004
+  material_source: doc-demo-supplement-quote@报价!A2:H2
+  expected_policy_reference:
+    document_key: demo_supplier_quote_policy_v1
+    section: quote_deviation_review
+
+approval:
+  required_role: procurement_manager
+  assignee_user_id: user-procurement-manager-demo
+  submitter_cannot_approve: true
+  expected_decision: approved
+  reason_required: true
+
+expected_state_transitions:
+  admission_case:
+  - draft
+  - pending_documents
+  - analyzing
+  - evidence_reviewing
+  - pending_approval
+  - approved
+  supplier_eligibility:
+  - candidate
+  - approved
+
+expected_final_state:
+  admission_case_status: approved
+  supplier_eligibility_status: approved
+  supplier_is_in_avl: true
+  historical_rule_hits_retained:
+  - VEN-002
+
+expected_audit_event_types:
+- admission_case_created
+- documents_registered
+- rule_hit_recorded
+- supplement_requested
+- document_supplemented
+- workflow_restarted
+- rules_evaluated
+- evidence_reviewed
+- decision_recorded
+- supplier_eligibility_changed
+
+deferred_scope:
+- VEN-003 质量证书临期复核
+- VEN-006 关键物料双人审批
+- 质量经理审批与限时豁免

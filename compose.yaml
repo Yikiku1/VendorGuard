@@ -1,0 +1,29 @@
+name: vendorguard
+
+services:
+  database:
+    image: pgvector/pgvector:0.8.6-pg18-bookworm@sha256:2ba9ca5f2e7daa0f0e7723cba1ee9167bab54efd3640516a44ac1a928dd67e7a
+    environment:
+      POSTGRES_DB: ${VENDORGUARD_DB_NAME}
+      POSTGRES_USER: ${VENDORGUARD_DB_USER}
+      POSTGRES_PASSWORD: ${VENDORGUARD_DB_PASSWORD}
+    ports:
+      - name: postgres
+        target: 5432
+        published: "${VENDORGUARD_DB_PORT}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ${VENDORGUARD_DB_DATA_DIR}
+        target: /var/lib/postgresql
+    shm_size: 128mb
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 30s

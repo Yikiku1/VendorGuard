@@ -1,0 +1,126 @@
+schema_version: '1.1'
+case_id: demo-procurement-exception-001
+case_type: procurement_exception
+name: 未准入供应商的采购例外
+fixture_status: defined_only
+synthetic_data: true
+purpose: 验证非 AVL 供应商触发 PR-001，经采购经理批准后只放行绑定 PR，且不会改变供应商资格。
+reference_date: '2026-09-01'
+
+actors:
+  requester:
+    user_id: user-procurement-specialist-demo
+    display_name: 演示采购专员
+    role: procurement_specialist
+  approver:
+    user_id: user-procurement-manager-demo
+    display_name: 演示采购经理
+    role: procurement_manager
+
+supplier:
+  supplier_id: supplier-demo-exception-001
+  display_name: 示例迅达密封材料有限公司
+  eligibility_status: candidate
+  is_in_avl_projection: false
+
+purchase_requisition:
+  pr_id: PR-DEMO-2026-0001
+  requester_user_id: user-procurement-specialist-demo
+  material_item_code: MATERIAL-DEMO-SEAL-001
+  material_category: standard_sealing_material
+  quantity: 1000
+  unit: piece
+  amount: 150000.0
+  currency: CNY
+  target_supplier_id: supplier-demo-exception-001
+  reason_for_non_avl_supplier: 现有 AVL 供应商无法满足模拟交期，仅申请本次采购例外。
+
+exception_request:
+  bound_pr_id: PR-DEMO-2026-0001
+  target_supplier_id: supplier-demo-exception-001
+  requested_valid_from: '2026-09-01T14:00:00+08:00'
+  requested_valid_until: '2026-09-03T18:00:00+08:00'
+  pr_binding_is_immutable: true
+  requested_scope:
+    material_item_code: MATERIAL-DEMO-SEAL-001
+    maximum_quantity: 1000
+    maximum_amount: 150000.0
+    currency: CNY
+
+structured_facts:
+  supplier_is_in_avl: false
+  supplier_eligibility_status: candidate
+  supplier_eligibility_snapshot_at: '2026-09-01T13:00:01+08:00'
+
+rule_evaluation:
+  enabled_rule_ids:
+  - PR-001
+  expected_rule_results:
+  - rule_id: PR-001
+    result: hit
+    action: require_exception_approval
+    required_roles:
+    - procurement_manager
+  expected_rule_hits:
+  - PR-001
+  deferred_rule_ids:
+  - VEN-006
+
+evidence_review:
+  evidence_sufficiency: sufficient
+  risk_id: risk-demo-exception-non-avl
+  rule_id: PR-001
+  material_source: supplier-demo-exception-001@2026-09-01T13:00:01+08:00
+  expected_policy_reference:
+    document_key: demo_procurement_exception_policy_v1
+    section: non_avl_supplier_exception
+
+approval:
+  required_role: procurement_manager
+  assignee_user_id: user-procurement-manager-demo
+  requester_cannot_approve: true
+  expected_decision: approved
+  reason_required: true
+
+approved_scope:
+  bound_pr_id: PR-DEMO-2026-0001
+  target_supplier_id: supplier-demo-exception-001
+  material_item_code: MATERIAL-DEMO-SEAL-001
+  maximum_quantity: 1000
+  maximum_amount: 150000.0
+  currency: CNY
+  valid_from: '2026-09-01T14:05:02+08:00'
+  valid_until: '2026-09-03T18:00:00+08:00'
+  reusable_for_other_prs: false
+
+expected_state_transitions:
+  procurement_exception_case:
+  - draft
+  - pending_approval
+  - approved
+  supplier_eligibility:
+  - candidate
+
+expected_final_state:
+  procurement_exception_case_status: approved
+  supplier_eligibility_status: candidate
+  supplier_is_in_avl: false
+  bound_pr_may_continue: true
+  other_pr_may_reuse_exception: false
+
+expected_expiry_behavior:
+  after_valid_until: expired
+  may_continue_after_expiry: false
+
+expected_audit_event_types:
+- purchase_requisition_created
+- avl_check_failed
+- procurement_exception_created
+- evidence_reviewed
+- decision_recorded
+- procurement_exception_approved
+
+deferred_scope:
+- VEN-006 关键物料双人审批
+- 质量经理审批
+- 独立采购例外工作台

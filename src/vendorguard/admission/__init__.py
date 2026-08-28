@@ -1,0 +1,1 @@
+"""Supplier admission case module."""

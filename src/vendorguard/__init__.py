@@ -1,0 +1,1 @@
+"""VendorGuard application package."""
