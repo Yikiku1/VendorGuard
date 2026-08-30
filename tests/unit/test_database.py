@@ -1,4 +1,7 @@
+from unittest.mock import AsyncMock, Mock
+
 import pytest
+from fastapi import FastAPI, Request
 from pytest import MonkeyPatch
 from sqlalchemy import MetaData
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -9,6 +12,7 @@ from vendorguard.database import (
     build_database_url,
     create_database_engine,
     create_session_factory,
+    get_database_session,
 )
 
 
@@ -76,3 +80,34 @@ async def test_create_session_factory_produces_async_sessions(monkeypatch: Monke
 
 def test_declarative_base_exposes_metadata() -> None:
     assert isinstance(Base.metadata, MetaData)
+
+
+async def test_get_database_session_uses_app_factory_and_closes_session() -> None:
+    session = AsyncMock(spec=AsyncSession)
+
+    session_context = AsyncMock()
+    session_context.__aenter__.return_value = session
+
+    session_factory = Mock(return_value=session_context)
+
+    app = FastAPI()
+    app.state.session_factory = session_factory
+
+    request = Request(
+        {
+            "type": "http",
+            "app": app,
+        }
+    )
+
+    session_dependency = get_database_session(request)
+
+    yielded_session = await anext(session_dependency)
+
+    assert yielded_session is session
+    session_factory.assert_called_once()
+
+    with pytest.raises(StopAsyncIteration):
+        await anext(session_dependency)
+
+    session_context.__aexit__.assert_awaited_once()

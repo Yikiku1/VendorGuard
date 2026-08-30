@@ -2,9 +2,9 @@
 
 VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处理供应商准入和采购申请例外，不替代采购、质量或法务人员的最终决定。
 
-> 最后整理：2026-08-28  
-> 当前阶段：Day 1 已完成，Day 2 已暂停并顺延到下一工作日  
-> 当前结论：PostgreSQL + pgvector、异步数据库基础、Alembic 和用户表模型已经建立；密码、JWT、登录和认证依赖尚未完成
+> 最后整理：2026-08-30
+> 当前阶段：Day 1 已完成，Day 2 认证基础部分完成
+> 当前结论：数据库、迁移、Argon2、JWT、应用数据库生命周期、两个演示账号和认证核心已经完成；HTTP 登录、Bearer 认证依赖和当前用户接口留到下一次继续
 
 ## 先读什么
 
@@ -36,18 +36,20 @@ VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处�
 - `src/vendorguard/logging.py` 已建立 `ContextVar` 请求上下文、`JsonFormatter` 和幂等日志器配置函数；正常与异常 HTTP 请求均写入带相同 `request_id` 的 JSON 日志
 - Day 1 共 13 个自动化测试通过；Ruff lint、Ruff format 和 mypy 对 `src`、`tests` 全部通过
 - PostgreSQL + pgvector 容器已在 `127.0.0.1:5433` 健康运行，数据目录使用 D 盘配置
-- SQLAlchemy 异步 Engine、Session 工厂、事务上下文、Alembic 配置、用户表模型和首个迁移已经建立
-- 四个角色代码已经固化，但本期只为采购专员和采购经理实现并验证演示流程
+- SQLAlchemy 异步 Engine、请求级 Session、事务上下文和应用生命周期已经建立；应用关闭时会释放连接池
+- Alembic 首个迁移已经完成升级、回退和再次升级验证；模型与迁移使用同名显式 `user_role` 约束，`alembic check` 无新增操作
+- 四个角色代码已经固化；Argon2 密码哈希、JWT 签发/解析及过期、伪造、缺少密钥等边界测试已经通过
+- `demo.specialist` 与 `demo.manager` 使用环境密码完成真实幂等种子验证，首次创建 2 个账号，再次执行创建 0 个账号
+- 用户名、密码和启用状态的认证核心已经实现并覆盖正确密码、错误密码和停用账号
 
 尚未开始：
 
-- `main.py` 仍是初始 Hello World，`README.md` 为空
+- 根目录初始 Hello World `main.py` 已删除，后端统一从 `vendorguard.app:create_app` 启动；`README.md` 仍为空
 - `src/vendorguard/` 的五个业务包仍为空骨架，没有模型或领域逻辑
-- 密码哈希、JWT、登录接口、认证依赖和追加式业务审计尚未实现
+- `/auth/login`、Bearer Token 认证依赖、`/auth/me` 和追加式业务审计尚未实现
 - 前端、规则引擎、实际演示材料、Agent、RAG 和业务/E2E 自动化测试尚未实现；目前只有 Day 1 工程基础测试，案例文件仍为 `defined_only`
-- Git 尚无首次提交，当前项目文件均未跟踪
 
-当前测试基线为 26 项通过、1 项失败。失败来自角色数据库约束的测试预期与模型配置不一致，属于 Day 2 未完成工作；2026-08-28 不再继续修复，顺延到下一工作日。
+当前测试基线为 42 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy、`git diff --check` 与 `alembic check` 均通过。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。
 
 不要因为目录或文档已经存在，就把对应功能视为已完成。
 
@@ -72,18 +74,17 @@ uv run uvicorn vendorguard.app:create_app --factory --host 127.0.0.1 --port 8000
 
 pytest 仍会报告 FastAPI `TestClient` 与 HTTP 客户端相关的 `StarletteDeprecationWarning`。它不影响当前验收，不应根据警告盲装依赖；进入后续依赖维护时再核对官方兼容关系和锁文件。
 
-## 新会话接手点（2026-08-28）
+## 新会话接手点（2026-08-30）
 
 新会话开始后，先完整阅读本文件和“先读什么”列出的四份项目文档，并继续遵循“新对话的协作方式”。当前可靠事实如下：
 
 - Day 1 已完成并在 10 天计划中勾选；不要重复实现配置、`/health`、错误响应或日志模块。
-- Day 2 已完成数据库容器、异步数据库基础、Alembic 和用户表模型；认证部分尚未完成。
-- 当前没有进程监听 `127.0.0.1:8000`，无需先停止旧的 Uvicorn。
-- Git 仓库没有 `HEAD`，尚无首次提交；`git status --short` 显示项目文件均未跟踪。此时 `git diff` 为空不代表工作区没有内容。
-- Day 1 联合验收仍为 pytest 13 passed、Ruff lint 通过、Ruff format 15 files already formatted、mypy 15 source files 无问题，以及真实 `/health` 启动验证通过。Day 2 当前全量测试为 26 passed、1 failed，不能标记完成。
+- Day 2 已完成数据库容器、请求级 Session、应用生命周期、Alembic、角色约束、Argon2、JWT、演示账号种子和认证核心。
+- 两个演示账号已经真实写入本地 PostgreSQL；种子重复执行返回 0，证明当前数据库中的幂等性。
+- 联合验收为 pytest 42 passed、Ruff lint/format 通过、mypy 24 个文件无问题、`alembic check` 无新增操作。
 - 唯一已知的非阻塞提示是 `StarletteDeprecationWarning`；不要仅根据警告安装 `httpx2` 或修改锁文件。
 
-下一工作日先收尾 Day 2，不提前进入业务模型：统一角色约束的模型、迁移与测试预期，然后依次实现 Argon2 密码、JWT、登录接口和两个演示账号的认证依赖。每完成一小步立即验证，不同时铺开准入、采购例外、Agent 或 RAG。
+下一次先收尾 Day 2，不提前进入业务模型：实现 `/auth/login` JSON 接口，再实现 Bearer Token 认证依赖和 `/auth/me`，验证正确/错误凭据、停用用户、过期 Token 与伪造 Token 的 HTTP 行为。完成联合验收后才进入最小案件模型。
 
 ## 产品定位
 
@@ -227,7 +228,7 @@ VendorGuard/
 
 `VEN-001` 至 `VEN-006`、`PR-001` 的输入字段、运算符、阈值和边界样例继续保留；`policies/rules/v1.0.0.yaml` 明确列出五条本期启用规则与两条延期规则。Day 1 工程基础已经完成并验收。
 
-2026-08-28 在用户明确表示疲劳后停止继续开发。下一工作日只收尾 Day 2：先修正角色约束测试，再实现 Argon2、JWT、登录和两个演示账号的认证依赖；验收通过后才进入最小案件模型。
+2026-08-30 已完成角色约束、Argon2、JWT、数据库生命周期、两个演示账号的幂等种子和认证核心。当天停止点是 `/auth/login` 集成测试尚未创建；下一次从 HTTP 登录接口开始，随后补 Bearer 认证依赖和 `/auth/me`。
 
 ## 开发顺序
 
