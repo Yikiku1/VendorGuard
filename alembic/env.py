@@ -6,9 +6,12 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from vendorguard import security
+from vendorguard.admission import AdmissionCase  # noqa: F401
+from vendorguard.audit import AuditEvent  # noqa: F401
 from vendorguard.config import load_settings
-from vendorguard.database import build_database_url
+from vendorguard.database import Base, build_database_url
+from vendorguard.security import User  # noqa: F401
+from vendorguard.suppliers import Supplier  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -28,7 +31,7 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
-target_metadata = security.User.__table__.metadata
+target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
