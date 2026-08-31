@@ -31,7 +31,7 @@
 
 | 阶段 | 每日状态 |
 | --- | --- |
-| M1 工程与数据基础 | [✅] Day 1　[进行中] Day 2 |
+| M1 工程与数据基础 | [✅] Day 1　[✅] Day 2 |
 | M2 两条业务闭环 | [ ] Day 3　[ ] Day 4 |
 | M3 解析、证据与编排 | [ ] Day 5　[ ] Day 6　[ ] Day 7 |
 | M4 前端闭环 | [ ] Day 8　[ ] Day 9 |
@@ -106,18 +106,17 @@
 - PostgreSQL + pgvector 容器、请求级 Session、应用生命周期、Alembic 和显式角色约束已经完成验证。
 - Argon2、JWT 签发/解析与安全边界、两个演示账号的真实幂等种子和认证核心已经完成。
 - 本地种子首次创建 2 个账号，再次执行创建 0 个账号；仓库不包含真实密码或 JWT 密钥。
-- `/auth/login`、Bearer Token 认证依赖和 `/auth/me` 尚未实现，因此 Day 2 仍是部分完成。
-- 下一次只收尾上述 HTTP 认证链路并完成联合验收，不与 Day 3 多个业务模型同时铺开。
+- `/auth/login`、Bearer Token 认证依赖和 `/auth/me` 已完成。
+- 2026-08-31 联合验收：pytest 51 passed，Ruff、mypy、`git diff --check` 和 `alembic check` 全部通过，Day 2 完成。
 
 ## M2：两条业务闭环
 
-### Day 3：完成认证并建立最小案件模型
+### Day 3：建立最小案件模型
 
 **目标工时：约 6 至 7 小时**
 
 **任务**
 
-- 先完成 Day 2 剩余的登录接口、Bearer 认证依赖、当前用户接口和 HTTP 认证测试。
 - 实现 `Supplier`、`AdmissionCase`、`Document` 和 `AuditEvent` 最小模型与迁移。
 - 实现创建供应商、创建准入案件和查询案件详情接口。
 - 保存附件元数据、SHA-256、类型和大小；暂不实现通用文件存储平台。

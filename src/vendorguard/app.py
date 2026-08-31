@@ -1,14 +1,63 @@
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from uuid import uuid4
+from typing import Annotated
+from uuid import UUID, uuid4
 
-from fastapi import FastAPI, Request, Response, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from vendorguard.config import load_settings
-from vendorguard.database import create_database_engine, create_session_factory
+from vendorguard.database import (
+    create_database_engine,
+    create_session_factory,
+    get_database_session,
+)
 from vendorguard.logging import bind_request_id, configure_json_logger
+from vendorguard.security import (
+    InvalidAccessTokenError,
+    User,
+    UserRole,
+    authenticate_user,
+    create_access_token,
+    decode_access_token,
+)
+
+
+class LoginRequest(BaseModel):
+    """表示登录接口接受的用户名和密码"""
+
+    username: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    """表示登录成功后返回的 Bearer Token"""
+
+    access_token: str
+    token_type: str
+
+
+class CurrentUserResponse(BaseModel):
+    """表示当前已认证用户的公开身份信息。"""
+
+    id: UUID
+    username: str
+    role: UserRole
+
+
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def create_app() -> FastAPI:
@@ -37,6 +86,85 @@ def create_app() -> FastAPI:
         debug=settings.debug,
         lifespan=lifespan,
     )
+
+    async def get_current_user(
+        credentials: Annotated[
+            HTTPAuthorizationCredentials | None,
+            Depends(bearer_scheme),
+        ],
+        session: Annotated[
+            AsyncSession,
+            Depends(get_database_session),
+        ],
+    ) -> User:
+        """根据 Bearer Token 查询当前有效用户。"""
+
+        if credentials is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="无效访问令牌",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        try:
+            claims = decode_access_token(credentials.credentials, settings)
+        except InvalidAccessTokenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="无效访问令牌",
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from exc
+
+        user = await session.scalar(select(User).where(User.id == claims.user_id))
+
+        if user is None or not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="无效访问令牌",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        return user
+
+    @app.post("/auth/login", response_model=TokenResponse)
+    async def login(
+        credentials: LoginRequest,
+        session: Annotated[
+            AsyncSession,
+            Depends(get_database_session),
+        ],
+    ) -> TokenResponse:
+        """验证用户凭据并签发访问令牌"""
+
+        user = await authenticate_user(
+            session,
+            username=credentials.username,
+            password=credentials.password,
+        )
+
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="账号或密码错误(无效)",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        return TokenResponse(
+            access_token=create_access_token(user, settings),
+            token_type="bearer",
+        )
+
+    @app.get("/auth/me", response_model=CurrentUserResponse)
+    async def current_user(
+        user: Annotated[User, Depends(get_current_user)],
+    ) -> CurrentUserResponse:
+        """返回当前已认证用户的信息"""
+
+        return CurrentUserResponse(
+            id=user.id,
+            username=user.username,
+            role=user.role,
+        )
 
     @app.middleware("http")
     async def add_request_id(

@@ -2,9 +2,9 @@
 
 VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处理供应商准入和采购申请例外，不替代采购、质量或法务人员的最终决定。
 
-> 最后整理：2026-08-30
-> 当前阶段：Day 1 已完成，Day 2 认证基础部分完成
-> 当前结论：数据库、迁移、Argon2、JWT、应用数据库生命周期、两个演示账号和认证核心已经完成；HTTP 登录、Bearer 认证依赖和当前用户接口留到下一次继续
+> 最后整理：2026-08-31
+> 当前阶段：Day 1、Day 2 已完成
+> 当前结论：数据库、迁移、演示账号、认证核心、HTTP 登录、Bearer 认证依赖和当前用户接口均已完成；下一步进入最小案件模型
 
 ## 先读什么
 
@@ -41,15 +41,16 @@ VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处�
 - 四个角色代码已经固化；Argon2 密码哈希、JWT 签发/解析及过期、伪造、缺少密钥等边界测试已经通过
 - `demo.specialist` 与 `demo.manager` 使用环境密码完成真实幂等种子验证，首次创建 2 个账号，再次执行创建 0 个账号
 - 用户名、密码和启用状态的认证核心已经实现并覆盖正确密码、错误密码和停用账号
+- `/auth/login`、Bearer Token 认证依赖和 `/auth/me` 已实现，覆盖登录成功、错误凭据、缺失、伪造、过期 Token 和数据库用户确认
 
 尚未开始：
 
 - 根目录初始 Hello World `main.py` 已删除，后端统一从 `vendorguard.app:create_app` 启动；`README.md` 仍为空
 - `src/vendorguard/` 的五个业务包仍为空骨架，没有模型或领域逻辑
-- `/auth/login`、Bearer Token 认证依赖、`/auth/me` 和追加式业务审计尚未实现
+- 追加式业务审计尚未实现
 - 前端、规则引擎、实际演示材料、Agent、RAG 和业务/E2E 自动化测试尚未实现；目前只有 Day 1 工程基础测试，案例文件仍为 `defined_only`
 
-当前测试基线为 42 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy、`git diff --check` 与 `alembic check` 均通过。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。
+当前测试基线为 51 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy、`git diff --check` 与 `alembic check` 均通过。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。
 
 不要因为目录或文档已经存在，就把对应功能视为已完成。
 
@@ -74,17 +75,17 @@ uv run uvicorn vendorguard.app:create_app --factory --host 127.0.0.1 --port 8000
 
 pytest 仍会报告 FastAPI `TestClient` 与 HTTP 客户端相关的 `StarletteDeprecationWarning`。它不影响当前验收，不应根据警告盲装依赖；进入后续依赖维护时再核对官方兼容关系和锁文件。
 
-## 新会话接手点（2026-08-30）
+## 新会话接手点（2026-08-31）
 
 新会话开始后，先完整阅读本文件和“先读什么”列出的四份项目文档，并继续遵循“新对话的协作方式”。当前可靠事实如下：
 
 - Day 1 已完成并在 10 天计划中勾选；不要重复实现配置、`/health`、错误响应或日志模块。
-- Day 2 已完成数据库容器、请求级 Session、应用生命周期、Alembic、角色约束、Argon2、JWT、演示账号种子和认证核心。
+- Day 2 已完成数据库容器、请求级 Session、应用生命周期、Alembic、角色约束、Argon2、JWT、演示账号种子、认证核心和 HTTP 认证链路。
 - 两个演示账号已经真实写入本地 PostgreSQL；种子重复执行返回 0，证明当前数据库中的幂等性。
-- 联合验收为 pytest 42 passed、Ruff lint/format 通过、mypy 24 个文件无问题、`alembic check` 无新增操作。
+- 联合验收为 pytest 51 passed、Ruff lint/format 通过、mypy 25 个文件无问题、`git diff --check` 通过、`alembic check` 无新增操作。
 - 唯一已知的非阻塞提示是 `StarletteDeprecationWarning`；不要仅根据警告安装 `httpx2` 或修改锁文件。
 
-下一次先收尾 Day 2，不提前进入业务模型：实现 `/auth/login` JSON 接口，再实现 Bearer Token 认证依赖和 `/auth/me`，验证正确/错误凭据、停用用户、过期 Token 与伪造 Token 的 HTTP 行为。完成联合验收后才进入最小案件模型。
+下一次从 Day 3 最小案件模型开始，不再重复实现认证功能。
 
 ## 产品定位
 
@@ -228,17 +229,16 @@ VendorGuard/
 
 `VEN-001` 至 `VEN-006`、`PR-001` 的输入字段、运算符、阈值和边界样例继续保留；`policies/rules/v1.0.0.yaml` 明确列出五条本期启用规则与两条延期规则。Day 1 工程基础已经完成并验收。
 
-2026-08-30 已完成角色约束、Argon2、JWT、数据库生命周期、两个演示账号的幂等种子和认证核心。当天停止点是 `/auth/login` 集成测试尚未创建；下一次从 HTTP 登录接口开始，随后补 Bearer 认证依赖和 `/auth/me`。
+2026-08-31 已完成 `/auth/login`、Bearer Token 认证依赖和 `/auth/me`，Day 2 全部验收通过。下一次进入 Day 3 最小案件模型。
 
 ## 开发顺序
 
-1. 收尾数据库认证基础，只验证采购专员和采购经理两个演示账号
-2. 使用结构化模拟事实跑通正常准入、补件和最小采购例外
-3. 实现五条启用规则、采购经理审批、提交人隔离和追加式审计
-4. 实现三种固定模板解析、确定性计算和来源定位
-5. 用 5 篇资料实现全文检索、pgvector、简单融合、引用和无证据拒答
-6. 用 LangGraph 串联两个受控 Agent，验证一个失败节点恢复场景
-7. 完成三个前端入口、Docker Compose 和演示材料
+1. 使用结构化模拟事实跑通正常准入、补件和最小采购例外
+2. 实现五条启用规则、采购经理审批、提交人隔离和追加式审计
+3. 实现三种固定模板解析、确定性计算和来源定位
+4. 用 5 篇资料实现全文检索、pgvector、简单融合、引用和无证据拒答
+5. 用 LangGraph 串联两个受控 Agent，验证一个失败节点恢复场景
+6. 完成三个前端入口、Docker Compose 和演示材料
 
 ## 交付标准
 
