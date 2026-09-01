@@ -11,6 +11,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    select,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -20,8 +21,10 @@ from vendorguard.audit import (
     AuditEventType,
     AuditSubjectType,
     append_audit_event,
+    list_audit_events,
 )
 from vendorguard.database import Base
+from vendorguard.suppliers import Supplier
 
 
 class AdmissionCaseStatus(StrEnum):
@@ -221,3 +224,42 @@ async def register_document_metadata(
     )
 
     return document, audit_event
+
+
+async def get_admission_case_detail(
+    session: AsyncSession,
+    *,
+    admission_case_id: UUID,
+) -> (
+    tuple[
+        AdmissionCase,
+        Supplier,
+        list[Document],
+        list[AuditEvent],
+    ]
+    | None
+):
+    """查询案件、供应商、材料和追加式审计时间线。"""
+
+    admission_case = await session.get(AdmissionCase, admission_case_id)
+    if admission_case is None:
+        return None
+
+    supplier = await session.get(Supplier, admission_case.supplier_id)
+    if supplier is None:
+        return None
+
+    documents_result = await session.scalars(
+        select(Document)
+        .where(Document.admission_case_id == admission_case_id)
+        .order_by(Document.created_at, Document.id)
+    )
+    documents = list(documents_result)
+
+    audit_events = await list_audit_events(
+        session,
+        subject_type=AuditSubjectType.ADMISSION_CASE,
+        subject_id=admission_case_id,
+    )
+
+    return admission_case, supplier, documents, audit_events

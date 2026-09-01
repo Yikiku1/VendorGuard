@@ -439,3 +439,95 @@ def test_specialist_gets_409_for_duplicate_document(
 
     assert response.status_code == 409
     assert response.json() == {"detail": "该材料已登记"}
+
+
+def test_specialist_can_query_admission_case_detail(
+    rollback_client: TestClient,
+    existing_admission_case_id: UUID,
+    existing_document_sha256: str,
+) -> None:
+    """采购专员可以查询案件、供应商、材料和审计时间线。"""
+
+    settings = load_settings()
+    specialist_password = settings.demo_specialist_password
+    assert specialist_password is not None
+
+    login_response = rollback_client.post(
+        "/auth/login",
+        json={
+            "username": "demo.specialist",
+            "password": specialist_password.get_secret_value(),
+        },
+    )
+    assert login_response.status_code == 200
+    authorization = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    current_user_response = rollback_client.get(
+        "/auth/me",
+        headers=authorization,
+    )
+    assert current_user_response.status_code == 200
+    current_user_id = current_user_response.json()["id"]
+
+    response = rollback_client.get(
+        f"/api/admission/cases/{existing_admission_case_id}",
+        headers=authorization,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["id"] == str(existing_admission_case_id)
+    assert data["status"] == "draft"
+    assert data["submitted_by_user_id"] == current_user_id
+
+    supplier = data["supplier"]
+    assert supplier["id"] == data["supplier_id"]
+    assert supplier["display_name"] == "准入案件测试供应商"
+    assert supplier["category_code"] == "electronic_components"
+    assert supplier["eligibility_status"] == "candidate"
+
+    documents = data["documents"]
+    assert len(documents) == 1
+    assert documents[0]["admission_case_id"] == str(existing_admission_case_id)
+    assert documents[0]["document_type"] == "business_license"
+    assert documents[0]["original_file_name"] == "existing-license.pdf"
+    assert documents[0]["file_size_bytes"] == 1024
+    assert documents[0]["sha256"] == existing_document_sha256
+
+    assert isinstance(data["audit_events"], list)
+
+
+def test_specialist_gets_404_when_querying_missing_admission_case(
+    rollback_client: TestClient,
+) -> None:
+    """查询不存在的准入案件时返回统一 404。"""
+
+    settings = load_settings()
+    specialist_password = settings.demo_specialist_password
+    assert specialist_password is not None
+
+    login_response = rollback_client.post(
+        "/auth/login",
+        json={
+            "username": "demo.specialist",
+            "password": specialist_password.get_secret_value(),
+        },
+    )
+    assert login_response.status_code == 200
+    authorization = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    response = rollback_client.get(
+        f"/api/admission/cases/{uuid4()}",
+        headers=authorization,
+    )
+
+    assert response.status_code == 404
+    body = response.json()
+    assert body["error"] == {
+        "code": "not_found",
+        "message": "Resource not found",
+    }
+    assert isinstance(body["request_id"], str)
+    assert body["request_id"]
+    assert response.headers["X-Request-ID"] == body["request_id"]

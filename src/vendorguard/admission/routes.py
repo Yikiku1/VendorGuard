@@ -12,6 +12,7 @@ from vendorguard.admission import (
     AdmissionCaseStatus,
     DocumentType,
     create_admission_case,
+    get_admission_case_detail,
     register_document_metadata,
 )
 from vendorguard.audit import AuditEventType, AuditSubjectType
@@ -59,6 +60,8 @@ class CreateAdmissionCaseRequest(BaseModel):
 
 class AuditEventResponse(BaseModel):
     """创建案件返回时的审计事件"""
+
+    model_config = ConfigDict(from_attributes=True)
 
     id: int
     subject_type: AuditSubjectType
@@ -108,6 +111,36 @@ class DocumentResponse(BaseModel):
     sha256: str
     created_at: datetime
     audit_event: AuditEventResponse
+
+
+class DocumentDetailResponse(BaseModel):
+    """案件详情中的材料元数据响应。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    admission_case_id: UUID
+    uploaded_by_user_id: UUID
+    document_type: DocumentType
+    original_file_name: str
+    media_type: str
+    file_size_bytes: int
+    sha256: str
+    created_at: datetime
+
+
+class AdmissionCaseDetailResponse(BaseModel):
+    """准入案件详情及其关联对象。"""
+
+    id: UUID
+    supplier_id: UUID
+    submitted_by_user_id: UUID
+    status: AdmissionCaseStatus
+    created_at: datetime
+    updated_at: datetime
+    supplier: SupplierResponse
+    documents: list[DocumentDetailResponse]
+    audit_events: list[AuditEventResponse]
 
 
 # ==================== HTTP 路由 ====================
@@ -263,4 +296,40 @@ async def register_document_metadata_endpoint(
             payload=audit_event.payload,
             occurred_at=audit_event.occurred_at,
         ),
+    )
+
+
+@router.get(
+    "/cases/{admission_case_id}",
+    response_model=AdmissionCaseDetailResponse,
+)
+async def get_admission_case_detail_endpoint(
+    admission_case_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_database_session)],
+    _: Annotated[User, Depends(get_current_user)],
+) -> AdmissionCaseDetailResponse:
+    """查询准入案件详情。"""
+
+    detail = await get_admission_case_detail(
+        db,
+        admission_case_id=admission_case_id,
+    )
+    if detail is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="准入案件不存在",
+        )
+
+    admission_case, supplier, documents, audit_events = detail
+
+    return AdmissionCaseDetailResponse(
+        id=admission_case.id,
+        supplier_id=admission_case.supplier_id,
+        submitted_by_user_id=admission_case.submitted_by_user_id,
+        status=admission_case.status,
+        created_at=admission_case.created_at,
+        updated_at=admission_case.updated_at,
+        supplier=SupplierResponse.model_validate(supplier),
+        documents=[DocumentDetailResponse.model_validate(document) for document in documents],
+        audit_events=[AuditEventResponse.model_validate(event) for event in audit_events],
     )
