@@ -60,6 +60,48 @@ class CurrentUserResponse(BaseModel):
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
+async def get_current_user(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None,
+        Depends(bearer_scheme),
+    ],
+    session: Annotated[
+        AsyncSession,
+        Depends(get_database_session),
+    ],
+) -> User:
+    """根据 Bearer Token 查询当前有效用户。"""
+
+    settings = load_settings()
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效访问令牌",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        claims = decode_access_token(credentials.credentials, settings)
+    except InvalidAccessTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效访问令牌",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    user = await session.scalar(select(User).where(User.id == claims.user_id))
+
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效访问令牌",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return user
+
+
 def create_app() -> FastAPI:
     """创建并配置 VendorGuard FastAPI 应用。"""
 
@@ -86,45 +128,6 @@ def create_app() -> FastAPI:
         debug=settings.debug,
         lifespan=lifespan,
     )
-
-    async def get_current_user(
-        credentials: Annotated[
-            HTTPAuthorizationCredentials | None,
-            Depends(bearer_scheme),
-        ],
-        session: Annotated[
-            AsyncSession,
-            Depends(get_database_session),
-        ],
-    ) -> User:
-        """根据 Bearer Token 查询当前有效用户。"""
-
-        if credentials is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="无效访问令牌",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-        try:
-            claims = decode_access_token(credentials.credentials, settings)
-        except InvalidAccessTokenError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="无效访问令牌",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from exc
-
-        user = await session.scalar(select(User).where(User.id == claims.user_id))
-
-        if user is None or not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="无效访问令牌",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-        return user
 
     @app.post("/auth/login", response_model=TokenResponse)
     async def login(
@@ -232,5 +235,10 @@ def create_app() -> FastAPI:
         """返回应用进程的基础健康状态。"""
 
         return {"status": "ok"}
+
+    # 注册业务路由
+    from vendorguard.admission.routes import router as admission_router
+
+    app.include_router(admission_router)
 
     return app
