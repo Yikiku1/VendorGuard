@@ -132,12 +132,13 @@
 - 可以查询材料清单与追加式审计时间线。
 - 非法状态迁移和重复材料被拒绝。
 
-**2026-08-31 当前进度（进行中）**
+**2026-09-01 当前进度（进行中）**
 
 - `Supplier`、`AdmissionCase`、`Document`、`AuditEvent` 最小模型及四个连续 Alembic 迁移已实现。
 - 同案件材料 SHA-256 重复约束、审计事件追加与顺序查询已经验证。
 - PostgreSQL 触发器已验证禁止更新和删除审计事件。
-- 联合验收为 pytest 55 passed，Ruff、mypy、`git diff --check` 和 `alembic check` 全部通过。
+- `POST /api/admission/suppliers` 已实现并验证，只有采购专员可以创建候选供应商，重复信用代码返回 409。
+- 联合验收为 pytest 59 passed，Ruff、mypy、`git diff --check` 和 `alembic check` 全部通过。
 - 创建案件、材料登记、案件详情、状态迁移及相应审计串联尚未实现，因此 Day 3 保持未勾选。
 
 ### Day 4：五条启用规则与两个最小后端闭环

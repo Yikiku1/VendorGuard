@@ -7,10 +7,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from vendorguard.app import get_current_user
 from vendorguard.database import get_database_session
+from vendorguard.dependencies import get_current_user
 from vendorguard.security import User, UserRole
-from vendorguard.suppliers import Supplier, SupplierEligibility
+from vendorguard.suppliers import (
+    Supplier,
+    SupplierEligibility,
+    create_supplier,
+)
 
 router = APIRouter(prefix="/api/admission", tags=["admission"])
 
@@ -48,19 +52,16 @@ async def create_supplier_endpoint(
     db: Annotated[AsyncSession, Depends(get_database_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Supplier:
-    """采购专员或采购经理创建供应商主体"""
+    """采购专员创建供应商主体。"""
 
-    # 1. 权限检查: 只有采购专员和采购经理可以创建供应商
-    if current_user.role not in {UserRole.PROCUREMENT_SPECIALIST, UserRole.PROCUREMENT_MANAGER}:
+    # 只有采购专员可以创建供应商。
+    if current_user.role != UserRole.PROCUREMENT_SPECIALIST:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="无权限创建供应商",
         )
 
-    # 2. 调用业务层函数
     try:
-        from vendorguard.admission import create_supplier
-
         supplier = await create_supplier(
             db=db,
             display_name=request.display_name,

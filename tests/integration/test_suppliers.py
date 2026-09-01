@@ -1,12 +1,41 @@
+from collections.abc import AsyncIterator
 from uuid import uuid4
 
+import pytest_asyncio
 from fastapi.testclient import TestClient
+from sqlalchemy import delete
 
 from vendorguard.app import create_app
 from vendorguard.config import load_settings
+from vendorguard.database import create_database_engine, create_session_factory
+from vendorguard.suppliers import Supplier
 
 
-def test_create_supplier_success() -> None:
+@pytest_asyncio.fixture
+async def created_registration_ids() -> AsyncIterator[list[str]]:
+    """清理当前测试创建的供应商, 避免污染本地数据库。"""
+
+    registration_ids: list[str] = []
+    yield registration_ids
+
+    if not registration_ids:
+        return
+
+    engine = create_database_engine(load_settings())
+    session_factory = create_session_factory(engine)
+
+    try:
+        async with session_factory() as session, session.begin():
+            await session.execute(
+                delete(Supplier).where(Supplier.declared_registration_id.in_(registration_ids))
+            )
+    finally:
+        await engine.dispose()
+
+
+def test_create_supplier_success(
+    created_registration_ids: list[str],
+) -> None:
     """采购专员可以成功创建供应商"""
 
     settings = load_settings()
@@ -28,11 +57,13 @@ def test_create_supplier_success() -> None:
 
         # 创建供应商 (使用唯一ID避免重复)
         unique_id = str(uuid4())[:8].upper()
+        registration_id = f"91440300TEST{unique_id}"
+        created_registration_ids.append(registration_id)
         response = client.post(
             "/api/admission/suppliers",
             json={
                 "display_name": f"深圳测试科技有限公司-{unique_id}",
-                "declared_registration_id": f"91440300TEST{unique_id}",
+                "declared_registration_id": registration_id,
                 "category_code": "electronic_components",
             },
             headers={"Authorization": f"Bearer {token}"},
@@ -41,13 +72,15 @@ def test_create_supplier_success() -> None:
     assert response.status_code == 201
     data = response.json()
     assert "深圳测试科技有限公司" in data["display_name"]
-    assert data["declared_registration_id"].startswith("91440300TEST")
+    assert data["declared_registration_id"] == registration_id
     assert data["eligibility_status"] == "candidate"
     assert "id" in data
     assert "created_at" in data
 
 
-def test_create_supplier_duplicate_registration_id() -> None:
+def test_create_supplier_duplicate_registration_id(
+    created_registration_ids: list[str],
+) -> None:
     """相同统一社会信用代码返回 409 冲突"""
 
     settings = load_settings()
@@ -57,9 +90,11 @@ def test_create_supplier_duplicate_registration_id() -> None:
 
     # 使用唯一ID
     unique_id = str(uuid4())[:8].upper()
+    registration_id = f"91440300DUP{unique_id}"
+    created_registration_ids.append(registration_id)
     payload = {
         "display_name": f"深圳重复测试公司-{unique_id}",
-        "declared_registration_id": f"91440300DUP{unique_id}",
+        "declared_registration_id": registration_id,
         "category_code": "raw_materials",
     }
 
@@ -107,3 +142,40 @@ def test_create_supplier_without_auth() -> None:
         )
 
     assert response.status_code == 401
+
+
+def test_procurement_manager_cannot_create_supplier(
+    created_registration_ids: list[str],
+) -> None:
+    """采购经理不能创建供应商。"""
+
+    settings = load_settings()
+    manager_password = settings.demo_manager_password
+    assert manager_password is not None
+
+    registration_id = f"91440300MANAGER{str(uuid4())[:8].upper()}"
+    created_registration_ids.append(registration_id)
+
+    with TestClient(create_app()) as client:
+        login_response = client.post(
+            "/auth/login",
+            json={
+                "username": "demo.manager",
+                "password": manager_password.get_secret_value(),
+            },
+        )
+        assert login_response.status_code == 200
+        token = login_response.json()["access_token"]
+
+        response = client.post(
+            "/api/admission/suppliers",
+            json={
+                "display_name": "经理无权创建的测试供应商",
+                "declared_registration_id": registration_id,
+                "category_code": "electronic_components",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "无权限创建供应商"

@@ -46,20 +46,21 @@ VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处�
 - 材料元数据已保存类型、大小和 SHA-256；数据库通过 `(admission_case_id, sha256)` 唯一约束拒绝同案件重复材料
 - `append_audit_event()` 和 `list_audit_events()` 已实现，审计事件使用稳定递增 ID 返回时间线
 - PostgreSQL 触发器已验证会阻止审计事件 `UPDATE` 和 `DELETE`，业务写入函数只 `flush()`，可与后续业务变化共用事务
-- `POST /api/admission/suppliers` 已实现，采购专员和采购经理可以创建供应商，统一社会信用代码唯一性由数据库约束保证
-- `admission/routes.py` 使用 Pydantic v2 `ConfigDict` 和标准权限检查模式；`get_current_user` 已从 `app.py` 导出为可复用依赖
-- 创建供应商业务函数位于 `admission/__init__.py`，使用 `flush()` 而非 `commit()`，事务边界由 HTTP 层控制
+- `POST /api/admission/suppliers` 已实现，仅采购专员可以创建供应商，统一社会信用代码唯一性由数据库约束保证
+- `admission/routes.py` 使用 Pydantic v2 `ConfigDict` 和标准权限检查模式；可复用的 `get_current_user` 位于 `dependencies.py`
+- 创建供应商业务函数位于 `suppliers.py`，使用 `flush()` 而非 `commit()`，事务边界由 HTTP 层控制
+- 供应商接口测试会清理本轮创建的模拟记录，不再持续污染本地数据库
 
 尚未开始：
 
 - 根目录初始 Hello World `main.py` 已删除，后端统一从 `vendorguard.app:create_app` 启动；`README.md` 仍为空
 - 创建准入案件和查询案件详情的 HTTP 接口尚未实现
-- 供应商、案件和审计事件的事务闭环尚未实现
+- 案件和审计事件的事务闭环尚未实现
 - 材料目前只有元数据模型和重复约束，尚未实现登记接口、材料清单查询或实际文件存储
 - 准入案件状态迁移尚未实现；非法状态迁移测试也尚未开始
 - 前端、规则引擎、实际演示材料、Agent、RAG 和完整业务/E2E 自动化测试尚未实现；案例文件仍为 `defined_only`
 
-当前测试基线为 58 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy、`git diff --check` 与 `alembic check` 均通过。数据库位于 `9be8c214387a (head)`。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。
+当前测试基线为 59 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy、`git diff --check` 与 `alembic check` 均通过。数据库位于 `9be8c214387a (head)`。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。
 
 不要因为目录或文档已经存在，就把对应功能视为已完成。
 
@@ -86,17 +87,17 @@ pytest 仍会报告 FastAPI `TestClient` 与 HTTP 客户端相关的 `StarletteD
 
 ## Claude Code 接手点（2026-09-01 更新）
 
-新会话开始后，先完整阅读本文件和”先读什么”列出的四份项目文档，并继续遵循”新对话的协作方式”。当前可靠事实如下：
+新会话开始后，先完整阅读本文件和“先读什么”列出的四份项目文档，并继续遵循“新对话的协作方式”。当前可靠事实如下：
 
 - Day 1 已完成并在 10 天计划中勾选；保留现有配置、`/health`、错误响应和日志模块。
 - Day 2 已完成数据库容器、请求级 Session、应用生命周期、Alembic 基础、角色约束、Argon2、JWT、演示账号种子、认证核心和 HTTP 认证链路。
 - 两个演示账号已经真实写入本地 PostgreSQL；种子重复执行返回 0，证明当前数据库中的幂等性。
-- Day 3 已完成模型层和创建供应商 HTTP 接口：`Supplier`、`AdmissionCase`、`Document`、`AuditEvent`、四个迁移、同案件材料 SHA-256 去重、审计追加/查询、数据库级禁止更新/删除和 `POST /api/admission/suppliers`。
-- Day 3 尚未完成创建案件 HTTP 接口、供应商+案件+审计的事务闭环、材料登记与详情查询、状态迁移和对应业务审计串联，因此 10 天计划中的 Day 3 保持未勾选。
-- 当前数据库迁移为 `9be8c214387a (head)`。联合验收为 pytest 58 passed、Ruff lint/format 通过、mypy 31 个文件无问题、`git diff --check` 通过、`alembic check` 无新增操作。
+- Day 3 已完成模型层和创建供应商 HTTP 接口：`Supplier`、`AdmissionCase`、`Document`、`AuditEvent`、四个迁移、同案件材料 SHA-256 去重、审计追加/查询、数据库级禁止更新/删除和 `POST /api/admission/suppliers`；只有采购专员可以创建供应商。
+- Day 3 尚未完成创建案件 HTTP 接口、案件与审计事件的事务闭环、材料登记与详情查询、状态迁移和对应业务审计串联，因此 10 天计划中的 Day 3 保持未勾选。
+- 当前数据库迁移为 `9be8c214387a (head)`。联合验收为 pytest 59 passed、Ruff lint/format 通过、mypy 32 个文件无问题、`git diff --check` 通过、`alembic check` 无新增操作。
 - 唯一已知的非阻塞提示是 `StarletteDeprecationWarning`；不要仅根据警告安装 `httpx2` 或修改锁文件。
 
-下一小步是”采购专员创建准入案件”：实现 `POST /api/admission/cases` 接口，在一个事务中创建供应商、案件和 `admission_case_created` 审计事件。案件必须绑定供应商 ID 和提交人 ID，默认状态为 `draft`。不要重复认证功能，也不要提前实现 Day 4 审批。
+下一小步是“采购专员创建准入案件”：实现 `POST /api/admission/cases` 接口，请求接收已有 `supplier_id`，并在一个事务中创建 `AdmissionCase` 和 `admission_case_created` 审计事件。案件必须绑定该供应商 ID 和当前提交人 ID，默认状态为 `draft`。不要重复创建供应商，也不要提前实现 Day 4 审批。
 
 ## 产品定位
 
@@ -240,7 +241,7 @@ VendorGuard/
 
 `VEN-001` 至 `VEN-006`、`PR-001` 的输入字段、运算符、阈值和边界样例继续保留；`policies/rules/v1.0.0.yaml` 明确列出五条本期启用规则与两条延期规则。Day 1 工程基础已经完成并验收。
 
-2026-08-31 已完成 `/auth/login`、Bearer Token 认证依赖和 `/auth/me`，Day 2 全部验收通过。Day 3 已完成最小模型、迁移、材料重复约束和追加式审计存储；下一步实现采购专员创建供应商与准入案件的小闭环。
+2026-09-01 已完成创建供应商 HTTP 接口及其权限、冲突和测试清理验证。Day 3 下一步实现基于已有 `supplier_id` 创建准入案件，并在同一事务追加审计事件。
 
 ## 开发顺序
 

@@ -13,25 +13,23 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from vendorguard.admission.routes import router as admission_router
 from vendorguard.config import load_settings
 from vendorguard.database import (
     create_database_engine,
     create_session_factory,
     get_database_session,
 )
+from vendorguard.dependencies import get_current_user
 from vendorguard.logging import bind_request_id, configure_json_logger
 from vendorguard.security import (
-    InvalidAccessTokenError,
     User,
     UserRole,
     authenticate_user,
     create_access_token,
-    decode_access_token,
 )
 
 
@@ -55,51 +53,6 @@ class CurrentUserResponse(BaseModel):
     id: UUID
     username: str
     role: UserRole
-
-
-bearer_scheme = HTTPBearer(auto_error=False)
-
-
-async def get_current_user(
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None,
-        Depends(bearer_scheme),
-    ],
-    session: Annotated[
-        AsyncSession,
-        Depends(get_database_session),
-    ],
-) -> User:
-    """根据 Bearer Token 查询当前有效用户。"""
-
-    settings = load_settings()
-
-    if credentials is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="无效访问令牌",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    try:
-        claims = decode_access_token(credentials.credentials, settings)
-    except InvalidAccessTokenError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="无效访问令牌",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
-
-    user = await session.scalar(select(User).where(User.id == claims.user_id))
-
-    if user is None or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="无效访问令牌",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return user
 
 
 def create_app() -> FastAPI:
@@ -236,9 +189,5 @@ def create_app() -> FastAPI:
 
         return {"status": "ok"}
 
-    # 注册业务路由
-    from vendorguard.admission.routes import router as admission_router
-
     app.include_router(admission_router)
-
     return app

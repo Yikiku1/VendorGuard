@@ -314,6 +314,7 @@ VendorGuard/
 | `policy` | 加载版本化规则、计算命中、生成审批要求 | 调用大模型作最终判断 |
 | `evidence` | 文档入库、混合检索、引用与拒答 | 改写业务事实或案件状态 |
 | `security.py` | 登录、JWT、角色和权限上下文 | 保存业务案件 |
+| `dependencies.py` | 提供可复用的 HTTP 认证依赖 | 保存业务状态或实现业务规则 |
 | `audit.py` | 追加并查询审计事件 | 更新或删除历史事件 |
 
 `app.py` 只装配 HTTP 路由和应用生命周期，业务规则不能写入其中。业务包可以调用根目录中的基础文件，但不能依赖其他业务包的内部文件。跨业务调用通过对方 `__init__.py` 暴露的少量函数完成，不允许直接修改其他模块拥有的数据表。只有当某个单文件已经出现多种独立职责或明显难以测试时才拆成目录。
@@ -343,11 +344,12 @@ PDF 页码、表格单元格、CSV 行和知识库原文在统一案件详情中
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
-| `POST` | `/admission-cases` | 创建供应商准入案件 |
-| `POST` | `/admission-cases/{id}/documents` | 上传准入材料 |
-| `POST` | `/admission-cases/{id}/run` | 启动或从失败节点恢复准入工作流 |
-| `GET` | `/admission-cases/{id}` | 查询准入案件详情 |
-| `POST` | `/admission-cases/{id}/decisions` | 提交批准、拒绝或补件决定 |
+| `POST` | `/api/admission/suppliers` | 采购专员创建候选供应商 |
+| `POST` | `/api/admission/cases` | 基于已有 `supplier_id` 创建供应商准入案件 |
+| `POST` | `/api/admission/cases/{id}/documents` | 上传准入材料 |
+| `POST` | `/api/admission/cases/{id}/run` | 启动或从失败节点恢复准入工作流 |
+| `GET` | `/api/admission/cases/{id}` | 查询准入案件详情 |
+| `POST` | `/api/admission/cases/{id}/decisions` | 提交批准、拒绝或补件决定 |
 | `POST` | `/purchase-requisitions` | 创建 PR 并校验目标供应商是否在 AVL |
 | `POST` | `/purchase-requisitions/{id}/exception-cases` | 为非 AVL 供应商创建例外案件 |
 | `POST` | `/exception-cases/{id}/run` | 执行例外规则与证据检查 |

@@ -3,6 +3,7 @@ from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sqlalchemy import CheckConstraint, DateTime, Enum, String, func
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from vendorguard.database import Base
@@ -57,3 +58,25 @@ class Supplier(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+
+async def create_supplier(
+    db: AsyncSession,
+    *,
+    display_name: str,
+    declared_registration_id: str,
+    category_code: str,
+) -> Supplier:
+    """创建供应商主体, 默认资格为候选状态"""
+
+    supplier = Supplier(
+        display_name=display_name,
+        declared_registration_id=declared_registration_id,
+        category_code=category_code,
+        eligibility_status=SupplierEligibility.CANDIDATE,
+    )
+
+    db.add(supplier)
+    await db.flush()  # 只刷新, 不提交; 让事务由调用方控制
+
+    return supplier
