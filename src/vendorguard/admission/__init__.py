@@ -12,8 +12,15 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from vendorguard.audit import (
+    AuditEvent,
+    AuditEventType,
+    AuditSubjectType,
+    append_audit_event,
+)
 from vendorguard.database import Base
 
 
@@ -147,3 +154,30 @@ class Document(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+
+async def create_admission_case(
+    session: AsyncSession,
+    *,
+    supplier_id: UUID,
+    submitted_by_user_id: UUID,
+) -> tuple[AdmissionCase, AuditEvent]:
+    """创建草稿准入案件并追加对应审计事件。"""
+
+    admission_case = AdmissionCase(
+        supplier_id=supplier_id,
+        submitted_by_user_id=submitted_by_user_id,
+    )
+    session.add(admission_case)
+    await session.flush()
+
+    audit_event = await append_audit_event(
+        session,
+        subject_type=AuditSubjectType.ADMISSION_CASE,
+        subject_id=admission_case.id,
+        event_type=AuditEventType.ADMISSION_CASE_CREATED,
+        actor_user_id=submitted_by_user_id,
+        payload={"supplier_id": str(supplier_id)},
+    )
+
+    return admission_case, audit_event

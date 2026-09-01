@@ -138,8 +138,10 @@
 - 同案件材料 SHA-256 重复约束、审计事件追加与顺序查询已经验证。
 - PostgreSQL 触发器已验证禁止更新和删除审计事件。
 - `POST /api/admission/suppliers` 已实现并验证，只有采购专员可以创建候选供应商，重复信用代码返回 409。
-- 联合验收为 pytest 59 passed，Ruff、mypy、`git diff --check` 和 `alembic check` 全部通过。
-- 创建案件、材料登记、案件详情、状态迁移及相应审计串联尚未实现，因此 Day 3 保持未勾选。
+- `POST /api/admission/cases` 已实现并验证，只有采购专员可以基于已有供应商创建 `draft` 案件；采购经理返回 403，不存在的供应商返回统一 404。
+- 案件绑定当前提交人，并在同一事务追加 `admission_case_created` 审计事件；接口测试使用事务回滚，不污染本地案件和审计数据。
+- 联合验收为 pytest 62 passed，Ruff、mypy 39 个文件、`git diff --check` 和 `alembic check` 全部通过。
+- 材料登记与清单查询、案件详情、状态迁移及相应审计串联尚未实现，因此 Day 3 保持未勾选。
 
 ### Day 4：五条启用规则与两个最小后端闭环
 
