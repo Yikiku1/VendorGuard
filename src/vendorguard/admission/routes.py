@@ -8,8 +8,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vendorguard.admission import (
+    AdmissionCase,
     AdmissionCaseStatus,
+    DocumentType,
     create_admission_case,
+    register_document_metadata,
 )
 from vendorguard.audit import AuditEventType, AuditSubjectType
 from vendorguard.database import get_database_session
@@ -73,6 +76,36 @@ class AdmissionCaseResponse(BaseModel):
     supplier_id: UUID
     submitted_by_user_id: UUID
     status: AdmissionCaseStatus
+    created_at: datetime
+    audit_event: AuditEventResponse
+
+
+class RegisterDocumentRequest(BaseModel):
+    """登记准入材料元数据的请求体。"""
+
+    document_type: DocumentType
+    original_file_name: str = Field(..., min_length=1, max_length=255)
+    media_type: str = Field(..., min_length=1, max_length=100)
+    file_size_bytes: int = Field(..., gt=0)
+    sha256: str = Field(
+        ...,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-fA-F]{64}$",
+    )
+
+
+class DocumentResponse(BaseModel):
+    """材料元数据及对应审计事件的响应。"""
+
+    id: UUID
+    admission_case_id: UUID
+    uploaded_by_user_id: UUID
+    document_type: DocumentType
+    original_file_name: str
+    media_type: str
+    file_size_bytes: int
+    sha256: str
     created_at: datetime
     audit_event: AuditEventResponse
 
@@ -152,6 +185,75 @@ async def create_admission_case_endpoint(
         submitted_by_user_id=admission_case.submitted_by_user_id,
         status=admission_case.status,
         created_at=admission_case.created_at,
+        audit_event=AuditEventResponse(
+            id=audit_event.id,
+            subject_type=audit_event.subject_type,
+            subject_id=audit_event.subject_id,
+            event_type=audit_event.event_type,
+            actor_user_id=audit_event.actor_user_id,
+            payload=audit_event.payload,
+            occurred_at=audit_event.occurred_at,
+        ),
+    )
+
+
+@router.post(
+    "/cases/{admission_case_id}/documents",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def register_document_metadata_endpoint(
+    admission_case_id: UUID,
+    request: RegisterDocumentRequest,
+    db: Annotated[AsyncSession, Depends(get_database_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> DocumentResponse:
+    """采购专员为已有准入案件登记一份材料元数据。"""
+
+    if current_user.role != UserRole.PROCUREMENT_SPECIALIST:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权限登记准入材料",
+        )
+
+    admission_case = await db.get(AdmissionCase, admission_case_id)
+    if admission_case is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="准入案件不存在",
+        )
+
+    try:
+        document, audit_event = await register_document_metadata(
+            db,
+            admission_case_id=admission_case_id,
+            uploaded_by_user_id=current_user.id,
+            document_type=request.document_type,
+            original_file_name=request.original_file_name,
+            media_type=request.media_type,
+            file_size_bytes=request.file_size_bytes,
+            sha256=request.sha256,
+        )
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        if "uq_documents_case_sha256" in str(exc.orig):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="该材料已登记",
+            ) from exc
+        raise
+
+    return DocumentResponse(
+        id=document.id,
+        admission_case_id=document.admission_case_id,
+        uploaded_by_user_id=document.uploaded_by_user_id,
+        document_type=document.document_type,
+        original_file_name=document.original_file_name,
+        media_type=document.media_type,
+        file_size_bytes=document.file_size_bytes,
+        sha256=document.sha256,
+        created_at=document.created_at,
         audit_event=AuditEventResponse(
             id=audit_event.id,
             subject_type=audit_event.subject_type,

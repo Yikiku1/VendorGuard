@@ -181,3 +181,43 @@ async def create_admission_case(
     )
 
     return admission_case, audit_event
+
+
+async def register_document_metadata(
+    session: AsyncSession,
+    *,
+    admission_case_id: UUID,
+    uploaded_by_user_id: UUID,
+    document_type: DocumentType,
+    original_file_name: str,
+    media_type: str,
+    file_size_bytes: int,
+    sha256: str,
+) -> tuple[Document, AuditEvent]:
+    """登记一份材料元数据并追加案件审计事件。"""
+
+    document = Document(
+        admission_case_id=admission_case_id,
+        uploaded_by_user_id=uploaded_by_user_id,
+        document_type=document_type,
+        original_file_name=original_file_name,
+        media_type=media_type,
+        file_size_bytes=file_size_bytes,
+        sha256=sha256.lower(),
+    )
+    session.add(document)
+    await session.flush()
+
+    audit_event = await append_audit_event(
+        session,
+        subject_type=AuditSubjectType.ADMISSION_CASE,
+        subject_id=admission_case_id,
+        event_type=AuditEventType.DOCUMENTS_REGISTERED,
+        actor_user_id=uploaded_by_user_id,
+        payload={
+            "document_count": 1,
+            "document_ids": [str(document.id)],
+        },
+    )
+
+    return document, audit_event
