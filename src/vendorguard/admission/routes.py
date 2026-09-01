@@ -14,6 +14,7 @@ from vendorguard.admission import (
     create_admission_case,
     get_admission_case_detail,
     register_document_metadata,
+    transition_admission_case,
 )
 from vendorguard.audit import AuditEventType, AuditSubjectType
 from vendorguard.database import get_database_session
@@ -141,6 +142,12 @@ class AdmissionCaseDetailResponse(BaseModel):
     supplier: SupplierResponse
     documents: list[DocumentDetailResponse]
     audit_events: list[AuditEventResponse]
+
+
+class TransitionAdmissionCaseRequest(BaseModel):
+    """迁移准入案件状态的请求体"""
+
+    target_status: AdmissionCaseStatus
 
 
 # ==================== HTTP 路由 ====================
@@ -332,4 +339,63 @@ async def get_admission_case_detail_endpoint(
         supplier=SupplierResponse.model_validate(supplier),
         documents=[DocumentDetailResponse.model_validate(document) for document in documents],
         audit_events=[AuditEventResponse.model_validate(event) for event in audit_events],
+    )
+
+
+@router.post(
+    "/cases/{admission_case_id}/transition",
+    response_model=AdmissionCaseResponse,
+)
+async def transition_admission_case_endpoint(
+    admission_case_id: UUID,
+    request: TransitionAdmissionCaseRequest,
+    db: Annotated[AsyncSession, Depends(get_database_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> AdmissionCaseResponse:
+    """采购专员迁移准入案件状态。"""
+
+    if current_user.role != UserRole.PROCUREMENT_SPECIALIST:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权限迁移准入案件",
+        )
+
+    try:
+        result = await transition_admission_case(
+            db,
+            admission_case_id=admission_case_id,
+            target_status=request.target_status,
+            actor_user_id=current_user.id,
+        )
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="准入案件不存在",
+        )
+
+    admission_case, audit_event = result
+    await db.commit()
+
+    return AdmissionCaseResponse(
+        id=admission_case.id,
+        supplier_id=admission_case.supplier_id,
+        submitted_by_user_id=admission_case.submitted_by_user_id,
+        status=admission_case.status,
+        created_at=admission_case.created_at,
+        audit_event=AuditEventResponse(
+            id=audit_event.id,
+            subject_type=audit_event.subject_type,
+            subject_id=audit_event.subject_id,
+            event_type=audit_event.event_type,
+            actor_user_id=audit_event.actor_user_id,
+            payload=audit_event.payload,
+            occurred_at=audit_event.occurred_at,
+        ),
     )

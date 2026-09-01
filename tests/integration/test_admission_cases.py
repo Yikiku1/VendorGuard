@@ -531,3 +531,117 @@ def test_specialist_gets_404_when_querying_missing_admission_case(
     assert isinstance(body["request_id"], str)
     assert body["request_id"]
     assert response.headers["X-Request-ID"] == body["request_id"]
+
+
+def test_specialist_can_move_case_to_pending_documents(
+    rollback_client: TestClient,
+    existing_admission_case_id: UUID,
+) -> None:
+    """采购专员可以把草稿案件转为待补件。"""
+
+    settings = load_settings()
+    specialist_password = settings.demo_specialist_password
+    assert specialist_password is not None
+
+    login_response = rollback_client.post(
+        "/auth/login",
+        json={
+            "username": "demo.specialist",
+            "password": specialist_password.get_secret_value(),
+        },
+    )
+    assert login_response.status_code == 200
+    authorization = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    response = rollback_client.post(
+        f"/api/admission/cases/{existing_admission_case_id}/transition",
+        json={"target_status": "pending_documents"},
+        headers=authorization,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == str(existing_admission_case_id)
+    assert data["status"] == "pending_documents"
+
+    audit_event = data["audit_event"]
+    assert audit_event["subject_type"] == "admission_case"
+    assert audit_event["subject_id"] == str(existing_admission_case_id)
+    assert audit_event["event_type"] == "admission_case_status_changed"
+    assert audit_event["actor_user_id"] == data["submitted_by_user_id"]
+    assert audit_event["payload"] == {
+        "from_status": "draft",
+        "to_status": "pending_documents",
+    }
+
+
+def test_specialist_cannot_skip_to_analyzing(
+    rollback_client: TestClient,
+    existing_admission_case_id: UUID,
+) -> None:
+    """采购专员不能跳过材料阶段直接进入分析。"""
+
+    settings = load_settings()
+    specialist_password = settings.demo_specialist_password
+    assert specialist_password is not None
+
+    login_response = rollback_client.post(
+        "/auth/login",
+        json={
+            "username": "demo.specialist",
+            "password": specialist_password.get_secret_value(),
+        },
+    )
+    assert login_response.status_code == 200
+
+    authorization = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    response = rollback_client.post(
+        f"/api/admission/cases/{existing_admission_case_id}/transition",
+        json={"target_status": "analyzing"},
+        headers=authorization,
+    )
+
+    assert response.status_code == 409
+    assert "不支持的准入案件状态迁移" in response.json()["detail"]
+
+    detail_response = rollback_client.get(
+        f"/api/admission/cases/{existing_admission_case_id}",
+        headers=authorization,
+    )
+
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["status"] == "draft"
+    assert detail["audit_events"] == []
+
+
+def test_procurement_manager_cannot_transition_admission_case(
+    rollback_client: TestClient,
+    existing_admission_case_id: UUID,
+) -> None:
+    """采购经理不能代替采购专员迁移准入案件。"""
+
+    settings = load_settings()
+    manager_password = settings.demo_manager_password
+    assert manager_password is not None
+
+    login_response = rollback_client.post(
+        "/auth/login",
+        json={
+            "username": "demo.manager",
+            "password": manager_password.get_secret_value(),
+        },
+    )
+    assert login_response.status_code == 200
+
+    authorization = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    response = rollback_client.post(
+        f"/api/admission/cases/{existing_admission_case_id}/transition",
+        json={"target_status": "pending_documents"},
+        headers=authorization,
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "无权限迁移准入案件"}

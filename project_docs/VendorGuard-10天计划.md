@@ -32,7 +32,7 @@
 | 阶段 | 每日状态 |
 | --- | --- |
 | M1 工程与数据基础 | [✅] Day 1　[✅] Day 2 |
-| M2 两条业务闭环 | [ ] Day 3　[ ] Day 4 |
+| M2 两条业务闭环 | [✅] Day 3　[ ] Day 4 |
 | M3 解析、证据与编排 | [ ] Day 5　[ ] Day 6　[ ] Day 7 |
 | M4 前端闭环 | [ ] Day 8　[ ] Day 9 |
 | M5 评测与交付 | [ ] Day 10 |
@@ -132,7 +132,7 @@
 - 可以查询材料清单与追加式审计时间线。
 - 非法状态迁移和重复材料被拒绝。
 
-**2026-09-01 当前进度（进行中）**
+**2026-09-01 当前进度（已完成）**
 
 - `Supplier`、`AdmissionCase`、`Document`、`AuditEvent` 最小模型及四个连续 Alembic 迁移已实现。
 - 同案件材料 SHA-256 重复约束、审计事件追加与顺序查询已经验证。
@@ -143,8 +143,10 @@
 - `POST /api/admission/cases/{case_id}/documents` 已实现并验证，仅采购专员可以登记材料元数据；采购经理返回 403，不存在的案件返回统一 404，同案件重复 SHA-256 返回 409。
 - 材料登记与 `documents_registered` 审计事件在同一事务完成，接口测试覆盖成功、权限、案件存在性、数据库唯一约束和事务回滚。
 - `GET /api/admission/cases/{case_id}` 已实现并验证，采购专员可以查询案件、供应商、材料元数据列表和追加式审计时间线；不存在的案件返回统一 404。
-- 联合验收为 pytest 68 passed，Ruff、mypy 39 个文件、`git diff --check` 和 `alembic check` 全部通过。
-- 实际文件存储、状态迁移及后续业务审计串联尚未实现，因此 Day 3 保持未勾选。
+- `POST /api/admission/cases/{case_id}/transition` 已实现并验证，当前支持 `draft -> pending_documents`；合法迁移追加 `admission_case_status_changed` 审计事件。
+- 非法迁移返回 409 且状态保持不变、成功状态审计不追加；采购经理迁移返回 403。
+- 联合验收为 pytest 71 passed，Ruff lint/format、mypy、`git diff --check` 和 `alembic check` 全部通过。
+- 实际文件存储仍未实现，材料接口当前只保存元数据；Day 4 规则与审批尚未开始。
 
 ### Day 4：五条启用规则与两个最小后端闭环
 

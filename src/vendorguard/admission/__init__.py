@@ -40,6 +40,14 @@ class AdmissionCaseStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+_ALLOWED_ADMISSION_CASE_TRANSITIONS: dict[
+    AdmissionCaseStatus,
+    frozenset[AdmissionCaseStatus],
+] = {
+    AdmissionCaseStatus.DRAFT: frozenset({AdmissionCaseStatus.PENDING_DOCUMENTS}),
+}
+
+
 _CASE_STATUS_VALUES_SQL = ", ".join(f"'{status.value}'" for status in AdmissionCaseStatus)
 
 
@@ -263,3 +271,44 @@ async def get_admission_case_detail(
     )
 
     return admission_case, supplier, documents, audit_events
+
+
+async def transition_admission_case(
+    session: AsyncSession,
+    *,
+    admission_case_id: UUID,
+    target_status: AdmissionCaseStatus,
+    actor_user_id: UUID,
+) -> tuple[AdmissionCase, AuditEvent] | None:
+    """迁移准入案件状态并追加状态变化审计事件。"""
+
+    admission_case = await session.get(AdmissionCase, admission_case_id)
+    if admission_case is None:
+        return None
+
+    allowed_targets = _ALLOWED_ADMISSION_CASE_TRANSITIONS.get(
+        admission_case.status,
+        frozenset(),
+    )
+    if target_status not in allowed_targets:
+        raise ValueError(
+            f"不支持的准入案件状态迁移: {admission_case.status.value} -> {target_status.value}"
+        )
+
+    from_status = admission_case.status
+    admission_case.status = target_status
+    await session.flush()
+
+    audit_event = await append_audit_event(
+        session,
+        subject_type=AuditSubjectType.ADMISSION_CASE,
+        subject_id=admission_case.id,
+        event_type=AuditEventType.ADMISSION_CASE_STATUS_CHANGED,
+        actor_user_id=actor_user_id,
+        payload={
+            "from_status": from_status.value,
+            "to_status": target_status.value,
+        },
+    )
+
+    return admission_case, audit_event

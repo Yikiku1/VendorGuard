@@ -3,8 +3,8 @@
 VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处理供应商准入和采购申请例外，不替代采购、质量或法务人员的最终决定。
 
 > 最后整理：2026-09-01
-> 当前阶段：Day 1、Day 2 已完成；Day 3 进行中
-> 当前结论：最小案件模型、追加式审计存储、创建供应商、创建准入案件、材料登记和案件详情 HTTP 接口已经验证；下一步实现案件状态迁移
+> 当前阶段：Day 1、Day 2、Day 3 已完成；下一步进入 Day 4
+> 当前结论：最小案件模型、追加式审计存储、创建供应商、创建准入案件、材料登记、案件详情和最小状态迁移 HTTP 接口已经验证
 
 ## 先读什么
 
@@ -56,15 +56,16 @@ VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处�
 - `POST /api/admission/cases/{case_id}/documents` 已实现，仅采购专员可以登记材料元数据；采购经理返回 403，不存在的案件返回统一 404
 - 材料元数据登记会保存材料类型、文件名、媒体类型、大小和规范化 SHA-256，并在同一事务追加 `documents_registered` 审计事件
 - 同一案件重复 SHA-256 返回 409；材料登记集成测试覆盖成功、角色隔离、案件存在性、重复约束和测试事务回滚
+- `POST /api/admission/cases/{case_id}/transition` 已实现，仅采购专员可以执行当前支持的案件状态迁移；当前允许 `draft -> pending_documents`
+- 合法状态迁移会在同一事务追加 `admission_case_status_changed` 审计事件，非法迁移返回 409 且不修改状态、不追加成功审计，采购经理返回 403
 
 尚未开始：
 
 - 根目录初始 Hello World `main.py` 已删除，后端统一从 `vendorguard.app:create_app` 启动；`README.md` 仍为空
 - 实际文件存储尚未实现；案件详情已返回材料元数据清单
-- 准入案件状态迁移尚未实现；非法状态迁移测试也尚未开始
 - 前端、规则引擎、实际演示材料、Agent、RAG 和完整业务/E2E 自动化测试尚未实现；案例文件仍为 `defined_only`
 
-当前测试基线为 68 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy 39 个文件、`git diff --check` 与 `alembic check` 均通过。数据库位于 `9be8c214387a (head)`。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。
+当前测试基线为 71 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy、`git diff --check` 与 `alembic check` 均通过。数据库位于 `e3af14b303b1 (head)`。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。
 
 不要因为目录或文档已经存在，就把对应功能视为已完成。
 
@@ -98,11 +99,11 @@ pytest 仍会报告 FastAPI `TestClient` 与 HTTP 客户端相关的 `StarletteD
 - 两个演示账号已经真实写入本地 PostgreSQL；种子重复执行返回 0，证明当前数据库中的幂等性。
 - Day 3 已完成模型层、创建供应商和创建准入案件 HTTP 接口：`Supplier`、`AdmissionCase`、`Document`、`AuditEvent`、四个迁移、同案件材料 SHA-256 去重、审计追加/查询、数据库级禁止更新/删除、`POST /api/admission/suppliers` 和 `POST /api/admission/cases`；只有采购专员可以创建供应商和案件。
 - 创建案件会校验供应商存在性，绑定当前提交人并使用 `draft` 状态，在同一事务追加 `admission_case_created`；采购经理创建案件返回 403，不存在的供应商返回统一 404。
-- Day 3 已完成材料元数据登记、`documents_registered` 审计串联和案件详情查询；详情返回案件、供应商、材料元数据及审计时间线。尚未完成状态迁移，因此 10 天计划中的 Day 3 保持未勾选。
-- 当前数据库迁移为 `9be8c214387a (head)`。联合验收为 pytest 68 passed、Ruff lint/format 通过、mypy 39 个文件无问题、`git diff --check` 通过、`alembic check` 无新增操作。
+- Day 3 已完成材料元数据登记、`documents_registered` 审计串联、案件详情查询和最小状态迁移；详情返回案件、供应商、材料元数据及审计时间线，状态迁移覆盖合法、非法和角色隔离路径。
+- 当前数据库迁移为 `e3af14b303b1 (head)`。联合验收为 pytest 71 passed、Ruff lint/format 通过、mypy 无问题、`git diff --check` 通过、`alembic check` 无新增操作。
 - 唯一已知的非阻塞提示是 `StarletteDeprecationWarning`；不要仅根据警告安装 `httpx2` 或修改锁文件。
 
-下一小步是“实现准入案件状态迁移”：先覆盖 `draft -> pending_documents` 的合法迁移和非法迁移拒绝，并追加状态变化审计事件，不提前实现 Day 4 规则审批。
+下一小步是进入 Day 4，先实现版本化 YAML 规则 Schema 和第一条确定性准入规则；不提前实现前端、RAG 或复杂审批流程。
 
 ## 产品定位
 
@@ -246,7 +247,7 @@ VendorGuard/
 
 `VEN-001` 至 `VEN-006`、`PR-001` 的输入字段、运算符、阈值和边界样例继续保留；`policies/rules/v1.0.0.yaml` 明确列出五条本期启用规则与两条延期规则。Day 1 工程基础已经完成并验收。
 
-2026-09-01 已完成创建供应商、创建准入案件、材料元数据登记和案件详情 HTTP 接口；详情返回案件、供应商、材料元数据和追加式审计时间线。Day 3 下一步实现案件状态迁移。
+2026-09-01 已完成创建供应商、创建准入案件、材料元数据登记、案件详情和最小状态迁移 HTTP 接口；合法迁移、非法迁移和采购经理权限隔离均已验证。下一步进入 Day 4 规则实现。
 
 ## 开发顺序
 
