@@ -26,14 +26,18 @@ ApprovalRole = Literal["procurement_manager", "quality_manager"]
 
 
 class PolicyLoadError(ValueError):
-    """Raised when a policy file cannot be parsed or violates its schema."""
+    """策略文件无法读取或未通过 Schema 校验时抛出的配置错误。"""
 
 
 class PolicyModel(BaseModel):
+    """所有规则配置模型的公共基类, 禁止未声明的额外字段。"""
+
     model_config = ConfigDict(extra="forbid")
 
 
 class RuleCondition(PolicyModel):
+    """描述一条规则要检查的字段、运算符和比较值。"""
+
     field: str
     operator: RuleOperator
     value: Any
@@ -41,10 +45,14 @@ class RuleCondition(PolicyModel):
 
 
 class RulePreconditions(PolicyModel):
+    """描述规则执行前必须同时满足的前置条件集合。"""
+
     all: list[RuleCondition]
 
 
 class RuleOutcome(PolicyModel):
+    """描述规则命中、输入缺失或前置条件失败后的处置动作。"""
+
     action: RuleAction | None = None
     type: Literal["route_by_field_value"] | None = None
     routes: dict[str, RuleOutcome] | None = None
@@ -58,6 +66,8 @@ class RuleOutcome(PolicyModel):
 
     @model_validator(mode="after")
     def validate_shape(self) -> RuleOutcome:
+        """校验普通动作结果与按字段路由结果的结构是否一致。"""
+
         if self.type == "route_by_field_value":
             if not self.routes:
                 raise ValueError("route_by_field_value requires routes")
@@ -71,12 +81,16 @@ class RuleOutcome(PolicyModel):
 
 
 class EvidenceRequirement(PolicyModel):
+    """描述规则所需的材料证据或结构化事实证据。"""
+
     document_type: str | None = None
     location_type: str | None = None
     fact_type: str | None = None
 
     @model_validator(mode="after")
     def validate_source(self) -> EvidenceRequirement:
+        """校验证据要求只能指向材料或事实中的一种来源。"""
+
         if (self.document_type is None) == (self.fact_type is None):
             raise ValueError("evidence requirement needs exactly one document_type or fact_type")
         if self.document_type is not None and self.location_type is None:
@@ -87,6 +101,8 @@ class EvidenceRequirement(PolicyModel):
 
 
 class RuleDefinition(PolicyModel):
+    """描述一条完整规则及其适用范围、条件、结果和证据要求。"""
+
     id: str
     name: str
     scopes: list[PolicyScope]
@@ -101,6 +117,8 @@ class RuleDefinition(PolicyModel):
 
 
 class ImplementationScope(PolicyModel):
+    """描述规则在当前十天 MVP 中的启用与延期范围。"""
+
     status: Literal["scoped_for_10_day_mvp"]
     enabled_rule_ids: list[str]
     deferred_rule_ids: list[str]
@@ -108,6 +126,8 @@ class ImplementationScope(PolicyModel):
 
 
 class EvaluationContract(PolicyModel):
+    """描述规则引擎允许使用的运算符、动作和通用比较约定。"""
+
     allowed_operators: list[RuleOperator]
     allowed_actions: list[RuleAction]
     rule_results: list[RuleResult]
@@ -118,6 +138,8 @@ class EvaluationContract(PolicyModel):
 
 
 class PolicyDocument(PolicyModel):
+    """描述一个可版本化、生效时间明确的完整规则策略文档。"""
+
     schema_version: Literal["1.0"]
     policy_id: str
     version: str
@@ -133,6 +155,8 @@ class PolicyDocument(PolicyModel):
 
     @model_validator(mode="after")
     def validate_rule_registry(self) -> PolicyDocument:
+        """校验规则 ID 唯一, 并确保启用与延期清单完整覆盖规则。"""
+
         rule_ids = [rule.id for rule in self.rules]
         if len(rule_ids) != len(set(rule_ids)):
             raise ValueError("rule IDs must be unique")
@@ -148,7 +172,7 @@ class PolicyDocument(PolicyModel):
 
 
 def load_policy(path: str | Path) -> PolicyDocument:
-    """Load and validate a UTF-8 YAML policy document."""
+    """使用 UTF-8 读取并校验 YAML 规则策略文档。"""
 
     policy_path = Path(path)
     try:
