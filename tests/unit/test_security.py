@@ -151,7 +151,7 @@ def test_create_access_token_requires_jwt_secret() -> None:
         role=UserRole.PROCUREMENT_SPECIALIST,
     )
 
-    with pytest.raises(RuntimeError, match="JWT secret is required"):
+    with pytest.raises(RuntimeError, match="必须配置 JWT 密钥"):
         create_access_token(user, settings)
 
 
@@ -202,7 +202,7 @@ async def test_seed_demo_users_requires_manager_password() -> None:
 
     with pytest.raises(
         RuntimeError,
-        match="Demo account passwords are required",
+        match="必须配置演示账号密码",
     ):
         await seed_demo_users(session, settings)
 

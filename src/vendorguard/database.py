@@ -24,7 +24,7 @@ def build_database_url(settings: Settings) -> URL:
     """根据应用配置构造不会意外展示密码的数据库 URL。"""
 
     if settings.db_password is None:
-        raise ValueError("Database password is required")
+        raise ValueError("必须配置数据库密码")
 
     return URL.create(
         drivername="postgresql+asyncpg",

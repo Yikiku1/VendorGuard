@@ -42,7 +42,7 @@ def test_build_database_url_requires_password(
     monkeypatch.delenv("VENDORGUARD_BD_PASSWORD", raising=False)
     settings = load_settings(env_file=None)
 
-    with pytest.raises(ValueError, match="Database password is required"):
+    with pytest.raises(ValueError, match="必须配置数据库密码"):
         build_database_url(settings)
 
 

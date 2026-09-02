@@ -12,7 +12,7 @@ def test_not_found_returns_standard_error_response() -> None:
     assert response.status_code == 404
     assert body["error"] == {
         "code": "not_found",
-        "message": "Resource not found",
+        "message": "请求的资源不存在",
     }
     assert isinstance(body["request_id"], str)
     assert body["request_id"]
@@ -36,7 +36,7 @@ def test_unhandled_exception_returns_safe_response() -> None:
 
     assert body["error"] == {
         "code": "internal_server_error",
-        "message": "Internal server error",
+        "message": "服务器内部错误",
     }
     assert "sensitive-internal-detail" not in response.text
     assert response.headers["X-Request-ID"] == body["request_id"]

@@ -256,7 +256,7 @@ def test_specialist_gets_404_when_supplier_does_not_exist(
     body = response.json()
     assert body["error"] == {
         "code": "not_found",
-        "message": "Resource not found",
+        "message": "请求的资源不存在",
     }
     assert isinstance(body["request_id"], str)
     assert body["request_id"]
@@ -397,7 +397,7 @@ def test_specialist_gets_404_when_admission_case_does_not_exist(
     body = response.json()
     assert body["error"] == {
         "code": "not_found",
-        "message": "Resource not found",
+        "message": "请求的资源不存在",
     }
     assert isinstance(body["request_id"], str)
     assert body["request_id"]
@@ -526,7 +526,7 @@ def test_specialist_gets_404_when_querying_missing_admission_case(
     body = response.json()
     assert body["error"] == {
         "code": "not_found",
-        "message": "Resource not found",
+        "message": "请求的资源不存在",
     }
     assert isinstance(body["request_id"], str)
     assert body["request_id"]

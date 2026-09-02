@@ -144,7 +144,7 @@ async def seed_demo_users(
     """幂等创建采购专员和采购经理两个演示账号。"""
 
     if settings.demo_specialist_password is None or settings.demo_manager_password is None:
-        raise RuntimeError("Demo account passwords are required")
+        raise RuntimeError("必须配置演示账号密码")
 
     account_specs = (
         (
@@ -184,7 +184,7 @@ def _get_jwt_secret(settings: Settings) -> str:
     """读取 JWT 密钥并在缺少配置时立即报错。"""
 
     if settings.jwt_secret is None:
-        raise RuntimeError("JWT secret is required")
+        raise RuntimeError("必须配置 JWT 密钥")
 
     return settings.jwt_secret.get_secret_value()
 
@@ -234,4 +234,4 @@ def decode_access_token(
             expires_at=datetime.fromtimestamp(payload["exp"], tz=UTC),
         )
     except (InvalidTokenError, KeyError, TypeError, ValueError) as exc:
-        raise InvalidAccessTokenError("Invalid access token") from exc
+        raise InvalidAccessTokenError("访问令牌无效") from exc

@@ -101,7 +101,7 @@ def create_app() -> FastAPI:
         if user is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="账号或密码错误(无效)",
+                detail="账号或密码错误",
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
@@ -136,10 +136,10 @@ def create_app() -> FastAPI:
             try:
                 response = await call_next(request)
             except Exception:
-                http_logger.error("request failed")
+                http_logger.error("请求处理失败")
                 raise
             else:
-                http_logger.info("request completed")
+                http_logger.info("请求处理完成")
 
         response.headers["X-Request-ID"] = request_id
         return response
@@ -156,7 +156,7 @@ def create_app() -> FastAPI:
             content={
                 "error": {
                     "code": "not_found",
-                    "message": "Resource not found",
+                    "message": "请求的资源不存在",
                 },
                 "request_id": request.state.request_id,
             },
@@ -176,7 +176,7 @@ def create_app() -> FastAPI:
             content={
                 "error": {
                     "code": "internal_server_error",
-                    "message": "Internal server error",
+                    "message": "服务器内部错误",
                 },
                 "request_id": request_id,
             },

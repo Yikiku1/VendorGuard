@@ -36,7 +36,7 @@ def test_request_log_matches_response_request_id() -> None:
 
     payload = json.loads(lines[0])
 
-    assert payload["message"] == "request completed"
+    assert payload["message"] == "请求处理完成"
     assert payload["request_id"] == response.headers["X-Request-ID"]
 
 
@@ -80,7 +80,7 @@ def test_failed_request_log_matches_safe_response() -> None:
     body = response.json()
 
     assert payload["level"] == "ERROR"
-    assert payload["message"] == "request failed"
+    assert payload["message"] == "请求处理失败"
     assert payload["request_id"] == body["request_id"]
     assert response.headers["X-Request-ID"] == body["request_id"]
     assert "sensitive-internal-detail" not in response.text

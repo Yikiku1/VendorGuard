@@ -1,1 +1,1 @@
-"""VendorGuard application package."""
+"""VendorGuard 应用包。"""

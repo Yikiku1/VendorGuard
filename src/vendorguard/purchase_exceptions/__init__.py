@@ -1,1 +1,1 @@
-"""Purchase requisition exception workflow."""
+"""采购申请例外工作流模块。"""

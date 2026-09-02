@@ -56,7 +56,7 @@ def test_login_rejects_wrong_password_without_token() -> None:
 
     assert response.status_code == 401
     assert response.json() == {
-        "detail": "账号或密码错误(无效)",
+        "detail": "账号或密码错误",
     }
     assert response.headers["www-authenticate"] == "Bearer"
     assert "access_token" not in response.text
@@ -74,7 +74,7 @@ def test_login_does_not_reveal_unknown_username() -> None:
 
     assert response.status_code == 401
     assert response.json() == {
-        "detail": "账号或密码错误(无效)",
+        "detail": "账号或密码错误",
     }
     assert response.headers["www-authenticate"] == "Bearer"
     assert "access_token" not in response.text

@@ -26,7 +26,7 @@ from vendorguard.suppliers import (
     create_supplier,
 )
 
-router = APIRouter(prefix="/api/admission", tags=["admission"])
+router = APIRouter(prefix="/api/admission", tags=["供应商准入"])
 
 
 # ==================== Pydantic 模型 ====================

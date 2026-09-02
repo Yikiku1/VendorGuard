@@ -1,4 +1,4 @@
-"""Typed models and loader for versioned VendorGuard policies."""
+"""定义并加载版本化 VendorGuard 规则策略。"""
 
 from __future__ import annotations
 
@@ -70,13 +70,13 @@ class RuleOutcome(PolicyModel):
 
         if self.type == "route_by_field_value":
             if not self.routes:
-                raise ValueError("route_by_field_value requires routes")
+                raise ValueError("按字段值路由的结果必须配置 routes")
             if self.action is not None:
-                raise ValueError("route_by_field_value cannot define action")
+                raise ValueError("按字段值路由的结果不能同时配置 action")
         elif self.routes is not None:
-            raise ValueError("routes require type=route_by_field_value")
+            raise ValueError("只有 type=route_by_field_value 才能配置 routes")
         elif self.action is None:
-            raise ValueError("rule outcome requires action")
+            raise ValueError("普通规则结果必须配置 action")
         return self
 
 
@@ -92,11 +92,11 @@ class EvidenceRequirement(PolicyModel):
         """校验证据要求只能指向材料或事实中的一种来源。"""
 
         if (self.document_type is None) == (self.fact_type is None):
-            raise ValueError("evidence requirement needs exactly one document_type or fact_type")
+            raise ValueError("证据要求必须且只能配置 document_type 或 fact_type")
         if self.document_type is not None and self.location_type is None:
-            raise ValueError("document evidence requires location_type")
+            raise ValueError("材料证据必须配置 location_type")
         if self.fact_type is not None and self.location_type is not None:
-            raise ValueError("fact evidence cannot define location_type")
+            raise ValueError("事实证据不能配置 location_type")
         return self
 
 
@@ -159,15 +159,15 @@ class PolicyDocument(PolicyModel):
 
         rule_ids = [rule.id for rule in self.rules]
         if len(rule_ids) != len(set(rule_ids)):
-            raise ValueError("rule IDs must be unique")
+            raise ValueError("规则 ID 不能重复")
 
         enabled = set(self.implementation_scope.enabled_rule_ids)
         deferred = set(self.implementation_scope.deferred_rule_ids)
         configured = enabled | deferred
         if enabled & deferred:
-            raise ValueError("enabled and deferred rule IDs must be disjoint")
+            raise ValueError("启用规则和延期规则不能重复")
         if configured != set(rule_ids):
-            raise ValueError("enabled and deferred rule IDs must cover every rule exactly")
+            raise ValueError("启用规则和延期规则必须完整覆盖所有规则")
         return self
 
 
@@ -179,12 +179,12 @@ def load_policy(path: str | Path) -> PolicyDocument:
         raw_text = policy_path.read_text(encoding="utf-8")
         raw_data = yaml.safe_load(raw_text)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
-        raise PolicyLoadError(f"Unable to read policy: {policy_path}") from exc
+        raise PolicyLoadError(f"无法读取规则策略文件: {policy_path}") from exc
 
     try:
         return PolicyDocument.model_validate(raw_data)
     except ValidationError as exc:
-        raise PolicyLoadError(f"Invalid policy schema: {policy_path}") from exc
+        raise PolicyLoadError(f"规则策略文件未通过 Schema 校验: {policy_path}") from exc
 
 
 __all__ = ["PolicyDocument", "PolicyLoadError", "load_policy"]

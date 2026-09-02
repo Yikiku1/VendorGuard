@@ -1,1 +1,1 @@
-"""Evidence retrieval and citation module."""
+"""证据检索与引用模块。"""
