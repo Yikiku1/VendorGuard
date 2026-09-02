@@ -145,8 +145,9 @@
 - `GET /api/admission/cases/{case_id}` 已实现并验证，采购专员可以查询案件、供应商、材料元数据列表和追加式审计时间线；不存在的案件返回统一 404。
 - `POST /api/admission/cases/{case_id}/transition` 已实现并验证，当前支持 `draft -> pending_documents`；合法迁移追加 `admission_case_status_changed` 审计事件。
 - 非法迁移返回 409 且状态保持不变、成功状态审计不追加；采购经理迁移返回 403。
-- 联合验收为 pytest 71 passed，Ruff lint/format、mypy、`git diff --check` 和 `alembic check` 全部通过。
-- 实际文件存储仍未实现，材料接口当前只保存元数据；Day 4 规则与审批尚未开始。
+- Day 4 首个小功能已实现：版本化 YAML 规则 Schema 加载与校验，覆盖白名单运算符/动作、规则 ID 唯一性及启用/延期清单一致性；现有 `v1.0.0.yaml` 已通过结构化模型测试。
+- 联合验收为 pytest 74 passed，Ruff lint/format、mypy、`git diff --check` 和 `alembic check` 全部通过。
+- 实际文件存储仍未实现，材料接口当前只保存元数据；Day 4 规则执行与审批尚未开始。
 
 ### Day 4：五条启用规则与两个最小后端闭环
 

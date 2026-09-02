@@ -3,7 +3,7 @@
 VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处理供应商准入和采购申请例外，不替代采购、质量或法务人员的最终决定。
 
 > 最后整理：2026-09-01
-> 当前阶段：Day 1、Day 2、Day 3 已完成；下一步进入 Day 4
+> 当前阶段：Day 1、Day 2、Day 3 已完成；Day 4 进行中
 > 当前结论：最小案件模型、追加式审计存储、创建供应商、创建准入案件、材料登记、案件详情和最小状态迁移 HTTP 接口已经验证
 
 ## 先读什么
@@ -58,14 +58,15 @@ VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处�
 - 同一案件重复 SHA-256 返回 409；材料登记集成测试覆盖成功、角色隔离、案件存在性、重复约束和测试事务回滚
 - `POST /api/admission/cases/{case_id}/transition` 已实现，仅采购专员可以执行当前支持的案件状态迁移；当前允许 `draft -> pending_documents`
 - 合法状态迁移会在同一事务追加 `admission_case_status_changed` 审计事件，非法迁移返回 409 且不修改状态、不追加成功审计，采购经理返回 403
+- Day 4 首个小功能已完成：`vendorguard.policy.schema.load_policy()` 可按 UTF-8 加载并校验版本化 YAML 规则 Schema，拒绝未知字段、未知运算符/动作、重复规则 ID 和启用/延期清单覆盖不一致；现有 `policies/rules/v1.0.0.yaml` 已通过结构化模型测试
 
 尚未开始：
 
 - 根目录初始 Hello World `main.py` 已删除，后端统一从 `vendorguard.app:create_app` 启动；`README.md` 仍为空
 - 实际文件存储尚未实现；案件详情已返回材料元数据清单
-- 前端、规则引擎、实际演示材料、Agent、RAG 和完整业务/E2E 自动化测试尚未实现；案例文件仍为 `defined_only`
+- 规则执行器、采购经理审批、采购例外、前端、实际演示材料、Agent、RAG 和完整业务/E2E 自动化测试尚未实现；案例文件仍为 `defined_only`
 
-当前测试基线为 71 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy、`git diff --check` 与 `alembic check` 均通过。数据库位于 `e3af14b303b1 (head)`。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。
+当前测试基线为 74 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy、`git diff --check` 与 `alembic check` 均通过。数据库位于 `e3af14b303b1 (head)`。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。
 
 不要因为目录或文档已经存在，就把对应功能视为已完成。
 
@@ -247,7 +248,7 @@ VendorGuard/
 
 `VEN-001` 至 `VEN-006`、`PR-001` 的输入字段、运算符、阈值和边界样例继续保留；`policies/rules/v1.0.0.yaml` 明确列出五条本期启用规则与两条延期规则。Day 1 工程基础已经完成并验收。
 
-2026-09-01 已完成创建供应商、创建准入案件、材料元数据登记、案件详情和最小状态迁移 HTTP 接口；合法迁移、非法迁移和采购经理权限隔离均已验证。下一步进入 Day 4 规则实现。
+2026-09-02 已完成创建供应商、创建准入案件、材料元数据登记、案件详情、最小状态迁移 HTTP 接口和 Day 4 首个小功能（版本化 YAML 规则 Schema 加载与校验）；合法迁移、非法迁移、采购经理权限隔离和 Schema 边界均已验证。下一步实现第一条确定性规则。
 
 ## 开发顺序
 
