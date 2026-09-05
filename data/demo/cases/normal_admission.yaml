@@ -68,6 +68,7 @@ structured_facts:
     business_license_document_status: doc-demo-normal-license@page:1
     quote_deviation_percent: doc-demo-normal-quote@报价!A2:H2
     on_time_delivery_rate: doc-demo-normal-delivery@rows:2-21
+    category_required_documents_complete: doc-demo-normal-license@page:1
 
 rule_evaluation:
   enabled_rule_ids:
