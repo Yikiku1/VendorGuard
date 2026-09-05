@@ -3,8 +3,8 @@
 VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处理供应商准入和采购申请例外，不替代采购、质量或法务人员的最终决定。
 
 > 最后整理：2026-09-05
-> 当前阶段：Day 1、Day 2、Day 3 已完成；Day 4 进行中：Schema、VEN-001、YAML 启用清单对齐已完成；下一步实现 VEN-002
-> 当前结论：最小案件模型、追加式审计存储、创建供应商、创建准入案件、材料登记、案件详情、最小状态迁移 HTTP 接口和 `VEN-001` 规则执行已经验证
+> 当前阶段：Day 1、Day 2、Day 3 已完成；Day 4 已完成规则引擎（Schema、VEN-001、VEN-002）与采购经理审批接口（含审计扩展与状态迁移表补齐）；Day 4 完成判定第 2 条“正常准入进入待审批状态”依赖结构化事实编排，推到 Day 5
+> 当前结论：最小案件模型、追加式审计存储、创建供应商、创建准入案件、材料登记、案件详情、最小状态迁移 HTTP 接口、`VEN-001` 与 `VEN-002` 规则执行、采购经理审批决定端点 (`POST /api/admission/cases/{id}/decision`) 均已通过自动化测试验证
 
 ## 先读什么
 
@@ -61,14 +61,18 @@ VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处�
 - Day 4 首个小功能已完成：`vendorguard.policy.schema.load_policy()` 可按 UTF-8 加载并校验版本化 YAML 规则 Schema，拒绝未知字段、未知运算符/动作、重复规则 ID 和启用/延期清单覆盖不一致；现有 `policies/rules/v1.0.0.yaml` 已通过结构化模型测试
 - `VEN-001` 规则执行器已通过 3 项聚焦测试：营业执照状态正常不命中、过期时按字段值路由到补件结果、缺少输入时使用 YAML 的补件结果
 - 2026-09-05 已完成 `policies/rules/v1.0.0.yaml` 启用清单对齐：`enabled_rule_ids` 收敛为 `VEN-001`、`VEN-002`，其余五条（`VEN-003` 至 `VEN-006`、`PR-001`）全部放入 `deferred_rule_ids`；`tests/unit/test_policy_schema.py` 的断言已同步；数据库迁移未涉及
+- 2026-09-05 已完成 `VEN-002` 规则执行：`equals` 运算符通过 `_condition_matches` 辅助函数落地，布尔比较使用 `is` 防 `0 == False` 与 `"false" == False` 跨类型误命中；缺输入走 YAML 的 `create_manual_review` 与 `VEN-001` 走 `request_documents` 形成关键差异；6 条边界测试覆盖主流程、作用域外、缺输入和两种类型陷阱
+- 2026-09-05 已完成审计层扩展（Round 1a）：`AuditSubjectType` 新增 `supplier`，`AuditEventType` 新增 `admission_case_decision_recorded` 与 `supplier_eligibility_changed`；Alembic 迁移 `1fe47cf7cb3e` 将 `event_type` 列扩至 `VARCHAR(31)` 并刷新两条 CHECK 约束，`alter_column` 使用 `sa.Enum` 而非 `sa.String` 保证 `alembic check` 无漂移
+- 2026-09-05 已完成采购经理审批接口（Round 1b）：`AdmissionDecision` 枚举与状态转换表补齐 `pending_approval → {approved, rejected, pending_documents}`；`record_admission_decision` 单次事务内迁移案件状态，approved/rejected 同步更新供应商资格，按序追加 `decision_recorded → status_changed → supplier_eligibility_changed` 3 条审计事件（第三类事件仅在 approved/rejected 分支产生）
+- 2026-09-05 已完成 `POST /api/admission/cases/{id}/decision` HTTP 端点，仅采购经理可访问（其他角色返回 403），空 reason 通过 Pydantic `min_length=1` 返回 422，非法状态迁移返回 409，不存在的案件走全局 404 handler；8 条集成测试覆盖 approved/rejected/supplement_requested 三条主流程与角色/状态/参数/回滚四条边界路径，其中审计失败回滚测试用 `monkeypatch` 把 `append_audit_event` 替换为抛错，断言业务状态不落地
 
 尚未开始：
 
 - 根目录初始 Hello World `main.py` 已删除，后端统一从 `vendorguard.app:create_app` 启动；`README.md` 仍为空
 - 实际文件存储尚未实现；案件详情已返回材料元数据清单
-- `VEN-002`、采购经理最小决定接口、分析快照、前端、Agent、RAG 和完整业务/E2E 自动化测试尚未实现；结构化案例文件仍为 `defined_only`
+- 分析快照、前端、Agent、RAG、结构化事实抽取和完整业务/E2E 自动化测试尚未实现；结构化案例文件仍为 `defined_only`；Day 4 完成判定第 2 条“正常准入进入待审批状态”依赖结构化事实抽取与规则 outcome 应用，归入 Day 5 编排层交付
 
-当前测试基线为 77 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy、`git diff --check` 与 `alembic check` 均通过。数据库位于 `e3af14b303b1 (head)`。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。
+当前测试基线为 91 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy、`git diff --check` 与 `alembic check` 均通过。数据库位于 `1fe47cf7cb3e (head)`。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。
 
 不要因为目录或文档已经存在，就把对应功能视为已完成。
 
@@ -106,7 +110,7 @@ pytest 仍会报告 FastAPI `TestClient` 与 HTTP 客户端相关的 `StarletteD
 - 当前数据库迁移为 `e3af14b303b1 (head)`。联合验收为 pytest 77 passed、Ruff lint/format 通过、mypy 无问题、`git diff --check` 通过、`alembic check` 无新增操作。
 - 唯一已知的非阻塞提示是 `StarletteDeprecationWarning`；不要仅根据警告安装 `httpx2` 或修改锁文件。
 
-（本节为 2026-09-01 的历史接手快照，保留原描述便于追溯。截至 2026-09-05，`VEN-001` 三条聚焦测试与 YAML 启用清单对齐已经完成，下一小步直接推进 `VEN-002`；不提前实现前端、RAG 或复杂审批流程。最新状态见“下一步”章节。）
+（本节为 2026-09-01 的历史接手快照，保留原描述便于追溯。截至 2026-09-05，Day 4 的规则引擎（`VEN-001`、`VEN-002`）与采购经理审批接口已经全部完成；pytest 累计 91 passed、迁移 head 已到 `1fe47cf7cb3e`。不提前实现前端、RAG 或复杂审批流程。最新状态见“当前进度”和“下一步”章节。）
 
 ## 产品定位
 
@@ -258,12 +262,16 @@ VendorGuard/
 
 `VEN-001` 至 `VEN-006`、`PR-001` 的领域定义继续保留；`policies/rules/v1.0.0.yaml` 已按 MVP 范围把 `enabled_rule_ids` 收敛为 `VEN-001`、`VEN-002`，其余五条（`VEN-003` 至 `VEN-006`、`PR-001`）全部放入 `deferred_rule_ids`。Day 1 至 Day 3 已完成并验收。
 
-2026-09-02 已完成创建供应商、创建准入案件、材料元数据登记、案件详情、最小状态迁移 HTTP 接口、版本化 YAML Schema 以及 `VEN-001` 的首批执行行为；合法迁移、非法迁移、采购经理权限隔离、Schema 边界和 `VEN-001` 三条聚焦路径均已验证。2026-09-05 已完成 YAML 启用清单的两条规则对齐，下一步实现 `VEN-002`。
+2026-09-02 已完成创建供应商、创建准入案件、材料元数据登记、案件详情、最小状态迁移 HTTP 接口、版本化 YAML Schema 以及 `VEN-001` 的首批执行行为。
+
+2026-09-05 已完成 Day 4 三条完成判定里的第 1、3 条：YAML 启用清单收敛为 `VEN-001`/`VEN-002`，两条规则共 9 条聚焦测试通过；采购经理审批决定端点上线，覆盖 approved/rejected/supplement_requested 三种决定的案件迁移、供应商资格联动、3 条有序审计事件、角色隔离、参数校验、状态非法回退和审计失败事务回滚，集成测试累计 8 条通过。Day 4 完成判定第 2 条“正常准入进入待审批状态”依赖 Day 5 的结构化事实抽取与规则 outcome 应用，Day 4 未虚假宣告完成，记入 Day 5 起点。
+
+Day 5 起点：用 `data/demo/cases/normal_admission.yaml` 与 `supplement_review.yaml` 作为契约，实现结构化事实的加载、按 case 状态触发规则评估、把规则 outcome 应用到案件状态与供应商资格上，使案件能从 draft 经 pending_documents 走到 pending_approval，补件案保留历史命中并可重新运行。
 
 ## 开发顺序
 
-1. 完成 `VEN-001`、`VEN-002`，用结构化模拟事实跑通正常准入和规则补件
-2. 实现采购经理通过/拒绝、提交人隔离、JSON 分析快照和追加式审计
+1. 完成 `VEN-001`、`VEN-002` 规则执行 ✅，用结构化模拟事实跑通正常准入和规则补件（推至 Day 5 编排层）
+2. 实现采购经理通过/拒绝 ✅、提交人隔离（当前角色模型天然保证，见 `record_admission_decision` docstring）✅、JSON 分析快照（未开始）、追加式审计 ✅
 3. 用 5 篇资料实现全文检索、pgvector、简单融合、引用和无证据拒答
 4. 用 LangGraph 串联两个受控 Agent，验证一个失败节点恢复场景
 5. 完成登录、案件队列、统一案件详情三个前端入口和一条 Playwright 主流程
