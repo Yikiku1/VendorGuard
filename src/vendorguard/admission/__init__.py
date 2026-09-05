@@ -24,7 +24,7 @@ from vendorguard.audit import (
     list_audit_events,
 )
 from vendorguard.database import Base
-from vendorguard.suppliers import Supplier
+from vendorguard.suppliers import Supplier, SupplierEligibility
 
 
 class AdmissionCaseStatus(StrEnum):
@@ -40,11 +40,33 @@ class AdmissionCaseStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class AdmissionDecision(StrEnum):
+    """采购经理在 pending_approval 阶段可以做出的三种审批决定"""
+
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    SUPPLEMENT_REQUESTED = "supplement_requested"
+
+
+_DECISION_TO_TARGET_STATUS: dict[AdmissionDecision, AdmissionCaseStatus] = {
+    AdmissionDecision.APPROVED: AdmissionCaseStatus.APPROVED,
+    AdmissionDecision.REJECTED: AdmissionCaseStatus.REJECTED,
+    AdmissionDecision.SUPPLEMENT_REQUESTED: AdmissionCaseStatus.PENDING_DOCUMENTS,
+}
+
+
 _ALLOWED_ADMISSION_CASE_TRANSITIONS: dict[
     AdmissionCaseStatus,
     frozenset[AdmissionCaseStatus],
 ] = {
     AdmissionCaseStatus.DRAFT: frozenset({AdmissionCaseStatus.PENDING_DOCUMENTS}),
+    AdmissionCaseStatus.PENDING_APPROVAL: frozenset(
+        {
+            AdmissionCaseStatus.APPROVED,
+            AdmissionCaseStatus.REJECTED,
+            AdmissionCaseStatus.PENDING_DOCUMENTS,
+        }
+    ),
 }
 
 
@@ -312,3 +334,96 @@ async def transition_admission_case(
     )
 
     return admission_case, audit_event
+
+
+async def record_admission_decision(
+    session: AsyncSession,
+    *,
+    admission_case_id: UUID,
+    decision: AdmissionDecision,
+    reason: str,
+    actor_user_id: UUID,
+) -> tuple[AdmissionCase, Supplier | None, list[AuditEvent]] | None:
+    """记录审批决定并返回 (案件, 受影响供应商或 None, 本次追加的审计事件序列)。
+
+    approved 与 rejected 会同步更新供应商资格 (candidate → approved/rejected),
+    supplement_requested 只回退案件到 pending_documents 且不改供应商资格, 此时
+    第二个返回值为 None。审计事件顺序固定为 decision_recorded → status_changed
+    → (eligibility_changed?)。
+
+    当前角色模型下 submitter 隔离在权限层天然成立: 采购专员与采购经理是两个独立
+    枚举值, 采购经理无法调用创建案件端点, 因此 case.submitted_by_user_id 必不等于
+    actor_user_id, 无需额外断言。未来引入多角色用户时须恢复本函数内的显式隔离检查
+    与对应测试。
+    """
+
+    admission_case = await session.get(AdmissionCase, admission_case_id)
+    if admission_case is None:
+        return None
+    target_status = _DECISION_TO_TARGET_STATUS[decision]
+    allowed_targets = _ALLOWED_ADMISSION_CASE_TRANSITIONS.get(
+        admission_case.status,
+        frozenset(),
+    )
+    if target_status not in allowed_targets:
+        raise ValueError(
+            f"不支持的审批决定: {admission_case.status.value} -> {target_status.value}"
+        )
+
+    from_status = admission_case.status
+    admission_case.status = target_status
+
+    supplier: Supplier | None = None
+    supplier_from_eligibility: SupplierEligibility | None = None
+    if decision in (AdmissionDecision.APPROVED, AdmissionDecision.REJECTED):
+        supplier = await session.get(Supplier, admission_case.supplier_id)
+        # 案件存在时其 supplier 必定存在 (FK ondelete=RESTRICT), 断言只用于让 mypy 通过。
+        assert supplier is not None
+        supplier_from_eligibility = supplier.eligibility_status
+        supplier.eligibility_status = (
+            SupplierEligibility.APPROVED
+            if decision == AdmissionDecision.APPROVED
+            else SupplierEligibility.REJECTED
+        )
+
+    await session.flush()
+
+    audit_events: list[AuditEvent] = [
+        await append_audit_event(
+            session,
+            subject_type=AuditSubjectType.ADMISSION_CASE,
+            subject_id=admission_case.id,
+            event_type=AuditEventType.ADMISSION_CASE_DECISION_RECORDED,
+            actor_user_id=actor_user_id,
+            payload={"decision": decision.value, "reason": reason},
+        ),
+        await append_audit_event(
+            session,
+            subject_type=AuditSubjectType.ADMISSION_CASE,
+            subject_id=admission_case.id,
+            event_type=AuditEventType.ADMISSION_CASE_STATUS_CHANGED,
+            actor_user_id=actor_user_id,
+            payload={
+                "from_status": from_status.value,
+                "to_status": target_status.value,
+            },
+        ),
+    ]
+
+    if supplier is not None and supplier_from_eligibility is not None:
+        audit_events.append(
+            await append_audit_event(
+                session,
+                subject_type=AuditSubjectType.SUPPLIER,
+                subject_id=supplier.id,
+                event_type=AuditEventType.SUPPLIER_ELIGIBILITY_CHANGED,
+                actor_user_id=actor_user_id,
+                payload={
+                    "from_eligibility": supplier_from_eligibility.value,
+                    "to_eligibility": supplier.eligibility_status.value,
+                    "reason": reason,
+                },
+            )
+        )
+
+    return admission_case, supplier, audit_events

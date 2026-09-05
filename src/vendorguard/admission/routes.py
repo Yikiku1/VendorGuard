@@ -10,9 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vendorguard.admission import (
     AdmissionCase,
     AdmissionCaseStatus,
+    AdmissionDecision,
     DocumentType,
     create_admission_case,
     get_admission_case_detail,
+    record_admission_decision,
     register_document_metadata,
     transition_admission_case,
 )
@@ -148,6 +150,22 @@ class TransitionAdmissionCaseRequest(BaseModel):
     """迁移准入案件状态的请求体"""
 
     target_status: AdmissionCaseStatus
+
+
+class AdmissionDecisionRequest(BaseModel):
+    """采购经理提交审批决定时必须附带理由。"""
+
+    decision: AdmissionDecision
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class AdmissionDecisionResponse(BaseModel):
+    """审批决定应用后的案件快照与本次追加的审计事件序列。"""
+
+    case_id: UUID
+    case_status: AdmissionCaseStatus
+    supplier_eligibility: SupplierEligibility | None
+    audit_events: list[AuditEventResponse]
 
 
 # ==================== HTTP 路由 ====================
@@ -398,4 +416,55 @@ async def transition_admission_case_endpoint(
             payload=audit_event.payload,
             occurred_at=audit_event.occurred_at,
         ),
+    )
+
+
+@router.post(
+    "/cases/{admission_case_id}/decision",
+    response_model=AdmissionDecisionResponse,
+)
+async def record_admission_decision_endpoint(
+    admission_case_id: UUID,
+    request: AdmissionDecisionRequest,
+    db: Annotated[AsyncSession, Depends(get_database_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> AdmissionDecisionResponse:
+    """采购经理对处于 pending_approval 的案件作出审批决定。"""
+
+    if current_user.role != UserRole.PROCUREMENT_MANAGER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权限审批准入案件",
+        )
+
+    try:
+        result = await record_admission_decision(
+            db,
+            admission_case_id=admission_case_id,
+            decision=request.decision,
+            reason=request.reason,
+            actor_user_id=current_user.id,
+        )
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    if result is None:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="准入案件不存在",
+        )
+
+    admission_case, supplier, audit_events = result
+    await db.commit()
+
+    return AdmissionDecisionResponse(
+        case_id=admission_case.id,
+        case_status=admission_case.status,
+        supplier_eligibility=supplier.eligibility_status if supplier is not None else None,
+        audit_events=[AuditEventResponse.model_validate(event) for event in audit_events],
     )
