@@ -23,12 +23,15 @@ from vendorguard.database import Base
 
 class AuditSubjectType(StrEnum):
     ADMISSION_CASE = "admission_case"
+    SUPPLIER = "supplier"
 
 
 class AuditEventType(StrEnum):
     ADMISSION_CASE_CREATED = "admission_case_created"
     DOCUMENTS_REGISTERED = "documents_registered"
     ADMISSION_CASE_STATUS_CHANGED = "admission_case_status_changed"
+    ADMISSION_CASE_DECISION_RECORDED = "admission_case_decision_recorded"
+    SUPPLIER_ELIGIBILITY_CHANGED = "supplier_eligibility_changed"
 
 
 _SUBJECT_VALUES_SQL = ", ".join(f"'{subject.value}'" for subject in AuditSubjectType)
