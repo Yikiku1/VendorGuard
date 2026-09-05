@@ -13,15 +13,15 @@ implementation_scope:
   enabled_rule_ids:
   - VEN-001
   - VEN-002
-  - VEN-004
-  - VEN-005
-  - PR-001
   deferred_rule_ids:
   - VEN-003
+  - VEN-004
+  - VEN-005
   - VEN-006
+  - PR-001
   notes:
   - 七条规则均保留为领域设计，但只有 enabled_rule_ids 进入本期实现与验收。
-  - VEN-003 与 VEN-006 依赖质量经理流程和双人审批，延期到一期交付后。
+  - VEN-003 至 VEN-006 与 PR-001 均延期，不进入本期实现与验收。
 
 evaluation_contract:
   allowed_operators:

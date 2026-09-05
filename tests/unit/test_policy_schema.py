@@ -12,11 +12,11 @@ def test_load_versioned_policy_schema() -> None:
 
     assert policy.schema_version == "1.0"
     assert policy.version == "1.0.0"
-    assert policy.implementation_scope.enabled_rule_ids == [
-        "VEN-001",
-        "VEN-002",
+    assert policy.implementation_scope.deferred_rule_ids == [
+        "VEN-003",
         "VEN-004",
         "VEN-005",
+        "VEN-006",
         "PR-001",
     ]
     assert len(policy.rules) == 7
