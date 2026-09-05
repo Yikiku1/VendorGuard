@@ -32,8 +32,8 @@
 | 阶段 | 每日状态 |
 | --- | --- |
 | M1 工程与数据基础 | [✅] Day 1　[✅] Day 2 |
-| M2 供应商准入闭环 | [✅] Day 3　[ ] Day 4 |
-| M3 解析、证据与编排 | [ ] Day 5　[ ] Day 6　[ ] Day 7 |
+| M2 供应商准入闭环 | [✅] Day 3　[ ] Day 4（第 2 条待 Day 6） |
+| M3 解析、证据与编排 | [✅] Day 5　[ ] Day 6　[ ] Day 7 |
 | M4 前端闭环 | [ ] Day 8　[ ] Day 9 |
 | M5 评测与交付 | [ ] Day 10 |
 
@@ -193,6 +193,15 @@
 - 支持范围内的事实和计算结果能定位并复算到模拟页码、单元格或 CSV 行。
 - 缺少必需字段时明确失败，不输出猜测结果；真实文件解析不列入本期验收。
 - 系统不把文档字段检查描述为权威真实性验证。
+
+**2026-09-05 当前进度（已完成）**
+
+- `policy/facts.py` 提供 `StructuredFacts`（白名单 + `StrictBool` + 强制来源定位）、`load_demo_case_facts()` 与 `certificate_remaining_days()`；事实缺来源、未知字段、类型越界均明确失败，不输出猜测。
+- `admission.evaluate_admission_case()` 按 `enabled_rule_ids`（`VEN-001`/`VEN-002`）评估，驱动 `draft/pending_documents → analyzing →（命中 request_documents 时）pending_documents`，单次事务内追加有序审计事件；不改供应商资格、不推进 `pending_approval`（该状态依赖 Day 6 证据审校，故 Day 4 完成判定第 2 条只部分兑现）。
+- 迁移 `0a22cbb97473` 仅替换 `audit_events.event_type` CHECK 约束加入 `rules_evaluated`/`rule_hit_recorded`，列宽不变。
+- `POST /api/admission/cases/{id}/evaluation` 端点上线，7 条集成测试覆盖正向、角色、缺来源 422、非法状态 409、不存在 404 与审计失败回滚。
+- Day 5 两条契约流程（正常案到 `analyzing`、补件案 `VEN-002`→`pending_documents` 重跑保留历史命中）通过。
+- 联合验收为 pytest 117 passed，Ruff lint/format、mypy、`git diff --check` 和 `alembic check` 全部通过。
 
 ### Day 6：知识库、混合检索、引用与评测
 

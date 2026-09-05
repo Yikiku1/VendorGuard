@@ -3,8 +3,8 @@
 VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处理供应商准入和采购申请例外，不替代采购、质量或法务人员的最终决定。
 
 > 最后整理：2026-09-05
-> 当前阶段：Day 1、Day 2、Day 3 已完成；Day 4 已完成规则引擎（Schema、VEN-001、VEN-002）与采购经理审批接口（含审计扩展与状态迁移表补齐）；Day 4 完成判定第 2 条“正常准入进入待审批状态”依赖结构化事实编排，推到 Day 5
-> 当前结论：最小案件模型、追加式审计存储、创建供应商、创建准入案件、材料登记、案件详情、最小状态迁移 HTTP 接口、`VEN-001` 与 `VEN-002` 规则执行、采购经理审批决定端点 (`POST /api/admission/cases/{id}/decision`) 均已通过自动化测试验证
+> 当前阶段：Day 1 至 Day 4 已完成；Day 5 已完成结构化模拟事实层、按案件状态触发的规则评估编排与评估 HTTP 端点，并以两个 YAML 案例通过契约验收。Day 4 完成判定第 2 条“正常准入进入待审批状态”按方案 B 只兑现到 `analyzing`：案件能走到 `analyzing`（补件案命中 `VEN-002` 落 `pending_documents` 并可重跑），`pending_approval` 依赖 Day 6 证据审校，本期不推进
+> 当前结论：最小案件模型、追加式审计存储、创建供应商、创建准入案件、材料登记、案件详情、最小状态迁移、采购经理审批决定端点、版本化规则 Schema 与 `VEN-001`/`VEN-002` 执行、结构化事实加载与来源定位校验、规则评估编排函数 (`evaluate_admission_case`) 与评估端点 (`POST /api/admission/cases/{id}/evaluation`) 均已通过自动化测试验证
 
 ## 先读什么
 
@@ -66,13 +66,19 @@ VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处�
 - 2026-09-05 已完成采购经理审批接口（Round 1b）：`AdmissionDecision` 枚举与状态转换表补齐 `pending_approval → {approved, rejected, pending_documents}`；`record_admission_decision` 单次事务内迁移案件状态，approved/rejected 同步更新供应商资格，按序追加 `decision_recorded → status_changed → supplier_eligibility_changed` 3 条审计事件（第三类事件仅在 approved/rejected 分支产生）
 - 2026-09-05 已完成 `POST /api/admission/cases/{id}/decision` HTTP 端点，仅采购经理可访问（其他角色返回 403），空 reason 通过 Pydantic `min_length=1` 返回 422，非法状态迁移返回 409，不存在的案件走全局 404 handler；8 条集成测试覆盖 approved/rejected/supplement_requested 三条主流程与角色/状态/参数/回滚四条边界路径，其中审计失败回滚测试用 `monkeypatch` 把 `append_audit_event` 替换为抛错，断言业务状态不落地
 
+- 2026-09-05 已完成 Day 5 结构化事实层（`policy/facts.py`）：`StructuredFacts` 以白名单 + `StrictBool` 约束本期启用规则消费的事实，每个已给出事实必须带 `document_id@定位符` 格式的来源定位，缺来源、未知字段、类型越界一律明确失败不猜测；`load_demo_case_facts()` 兼容正常案顶层与补件案阶段子段两种形状；`certificate_remaining_days()` 按“到期日当天仍有效”边界做确定性计算；10 条单元测试通过
+- 2026-09-05 已完成 Day 5 评估编排（`admission.evaluate_admission_case()`）：案件须处于 `draft`/`pending_documents` 才能评估，先移到 `analyzing`，任一命中动作为 `request_documents` 再移到 `pending_documents`，否则停在 `analyzing`；单次事务内按序追加 `admission_case_status_changed`→`rules_evaluated`→逐条 `rule_hit_recorded`→（如需）`admission_case_status_changed`；只评估 `enabled_rule_ids`（`VEN-001`/`VEN-002`），不改供应商资格、不推进 `pending_approval`（方案 B）；`analyzing` 与手动 `/transition` 分道，共享迁移表未改动
+- 2026-09-05 已完成审计层扩展与迁移：`AuditEventType` 新增 `rules_evaluated`、`rule_hit_recorded`，迁移 `0a22cbb97473` 仅替换 `event_type` CHECK 约束（列宽不变、无需 `alter_column`），`alembic check` 无新增操作
+- 2026-09-05 已完成评估 HTTP 端点 `POST /api/admission/cases/{id}/evaluation`：仅采购专员可发起，请求体复用 `StructuredFacts`（缺来源定位经 pydantic 返回 422），非可评估状态返回 409、案件不存在走统一 404 handler、审计失败事务回滚返回 500；7 条端点集成测试通过
+- 2026-09-05 已完成 Day 5 两条契约流程验收（服务层）：正常案由 `normal_admission.yaml` 加载事实评估后停在 `analyzing` 无命中；补件案首轮命中 `VEN-002` 进 `pending_documents`，重跑回 `analyzing` 后首轮命中仍在追加式审计时间线保留
+
 尚未开始：
 
 - 根目录初始 Hello World `main.py` 已删除，后端统一从 `vendorguard.app:create_app` 启动；`README.md` 仍为空
 - 实际文件存储尚未实现；案件详情已返回材料元数据清单
-- 分析快照、前端、Agent、RAG、结构化事实抽取和完整业务/E2E 自动化测试尚未实现；结构化案例文件仍为 `defined_only`；Day 4 完成判定第 2 条“正常准入进入待审批状态”依赖结构化事实抽取与规则 outcome 应用，归入 Day 5 编排层交付
+- 分析快照、前端、Agent、RAG、真实文件解析和完整工作流/E2E 自动化测试尚未实现；结构化案例文件的 `expected_state_transitions`/`expected_audit_event_types` 全链路仍为 `defined_only`，Day 5 只兑现到 `analyzing` 与 `pending_documents` 的评估子集；案件推进到 `pending_approval` 依赖 Day 6 证据审校，Day 4 完成判定第 2 条据此在 Day 5 只部分兑现
 
-当前测试基线为 91 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy、`git diff --check` 与 `alembic check` 均通过。数据库位于 `1fe47cf7cb3e (head)`。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。
+当前测试基线为 117 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy、`git diff --check` 与 `alembic check` 均通过。数据库位于 `0a22cbb97473 (head)`。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。另有一条与代码无关的本地 `PytestCacheWarning`（`.pytest_cache` 目录写权限），已被 gitignore，不影响验收。
 
 不要因为目录或文档已经存在，就把对应功能视为已完成。
 
@@ -266,11 +272,13 @@ VendorGuard/
 
 2026-09-05 已完成 Day 4 三条完成判定里的第 1、3 条：YAML 启用清单收敛为 `VEN-001`/`VEN-002`，两条规则共 9 条聚焦测试通过；采购经理审批决定端点上线，覆盖 approved/rejected/supplement_requested 三种决定的案件迁移、供应商资格联动、3 条有序审计事件、角色隔离、参数校验、状态非法回退和审计失败事务回滚，集成测试累计 8 条通过。Day 4 完成判定第 2 条“正常准入进入待审批状态”依赖 Day 5 的结构化事实抽取与规则 outcome 应用，Day 4 未虚假宣告完成，记入 Day 5 起点。
 
-Day 5 起点：用 `data/demo/cases/normal_admission.yaml` 与 `supplement_review.yaml` 作为契约，实现结构化事实的加载、按 case 状态触发规则评估、把规则 outcome 应用到案件状态与供应商资格上，使案件能从 draft 经 pending_documents 走到 pending_approval，补件案保留历史命中并可重新运行。
+2026-09-05 已完成 Day 5：结构化模拟事实层（`StructuredFacts` + `load_demo_case_facts` + 确定性计算）、评估编排 `evaluate_admission_case`（按 `enabled_rule_ids` 评估、驱动 `analyzing`/`pending_documents`、有序审计）、评估端点 `POST /api/admission/cases/{id}/evaluation` 与审计扩展迁移 `0a22cbb97473` 全部通过自动化测试（累计 117 项）。按方案 B，案件本期最远走到 `analyzing`（补件案经 `pending_documents` 可重跑并保留历史命中），`pending_approval` 依赖 Day 6 证据审校未推进，Day 4 完成判定第 2 条据此只部分兑现。
+
+Day 6 起点：建 `data/knowledge/` 五篇制度/案例、最小引用元数据（版本、生效期、页码或章节）、PostgreSQL 全文检索 + pgvector + 简单 RRF 融合、`evidence` 检索接口、5 至 8 个固定问题评测集与稳定“证据不足”拒答；在证据环节落地后，再评估把准入案件从 `analyzing` 经 `evidence_reviewing` 推进到 `pending_approval`，以正式补齐 Day 4 完成判定第 2 条。
 
 ## 开发顺序
 
-1. 完成 `VEN-001`、`VEN-002` 规则执行 ✅，用结构化模拟事实跑通正常准入和规则补件（推至 Day 5 编排层）
+1. 完成 `VEN-001`、`VEN-002` 规则执行 ✅，用结构化模拟事实经评估编排跑通正常准入（到 `analyzing`）与规则补件（`VEN-002`→`pending_documents`、可重跑保留历史）✅；推进到 `pending_approval` 待 Day 6 证据审校
 2. 实现采购经理通过/拒绝 ✅、提交人隔离（当前角色模型天然保证，见 `record_admission_decision` docstring）✅、JSON 分析快照（未开始）、追加式审计 ✅
 3. 用 5 篇资料实现全文检索、pgvector、简单融合、引用和无证据拒答
 4. 用 LangGraph 串联两个受控 Agent，验证一个失败节点恢复场景
