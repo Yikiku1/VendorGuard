@@ -24,6 +24,12 @@ from vendorguard.audit import (
     list_audit_events,
 )
 from vendorguard.database import Base
+from vendorguard.policy import (
+    PolicyDocument,
+    RuleEvaluation,
+    StructuredFacts,
+    evaluate_rule,
+)
 from vendorguard.suppliers import Supplier, SupplierEligibility
 
 
@@ -68,6 +74,14 @@ _ALLOWED_ADMISSION_CASE_TRANSITIONS: dict[
         }
     ),
 }
+
+
+_EVALUATION_START_STATUSES = frozenset(
+    {
+        AdmissionCaseStatus.DRAFT,
+        AdmissionCaseStatus.PENDING_DOCUMENTS,
+    }
+)
 
 
 _CASE_STATUS_VALUES_SQL = ", ".join(f"'{status.value}'" for status in AdmissionCaseStatus)
@@ -427,3 +441,119 @@ async def record_admission_decision(
         )
 
     return admission_case, supplier, audit_events
+
+
+async def evaluate_admission_case(
+    session: AsyncSession,
+    *,
+    admission_case_id: UUID,
+    facts: StructuredFacts,
+    policy: PolicyDocument,
+    actor_user_id: UUID,
+) -> tuple[AdmissionCase, list[AuditEvent]] | None:
+    """按启用规则评估案件事实, 迁移案件状态并追加评估审计。
+
+    案件须处于 draft 或 pending_documents 才能发起评估; 先移到 analyzing,
+    若任一命中动作是 request_documents 再移到 pending_documents, 否则停在
+    analyzing。Day 5 边界下不推进到 pending_approval (依赖 Day 6 证据审校),
+    也不改供应商资格。analyzing 只能经此编排进入, 与手动 /transition 分道,
+    人工跳步仍被既有测试拒为 409。
+    """
+
+    admission_case = await session.get(AdmissionCase, admission_case_id)
+    if admission_case is None:
+        return None
+
+    if admission_case.status not in _EVALUATION_START_STATUSES:
+        raise ValueError(f"不支持从 {admission_case.status.value} 状态发起规则评估")
+
+    audit_events: list[AuditEvent] = []
+
+    from_status = admission_case.status
+    admission_case.status = AdmissionCaseStatus.ANALYZING
+    await session.flush()
+    audit_events.append(
+        await append_audit_event(
+            session,
+            subject_type=AuditSubjectType.ADMISSION_CASE,
+            subject_id=admission_case.id,
+            event_type=AuditEventType.ADMISSION_CASE_STATUS_CHANGED,
+            actor_user_id=actor_user_id,
+            payload={
+                "from_status": from_status.value,
+                "to_status": AdmissionCaseStatus.ANALYZING.value,
+            },
+        )
+    )
+
+    fact_values = facts.model_dump(exclude={"sources"}, exclude_none=True)
+    enabled_ids = set(policy.implementation_scope.enabled_rule_ids)
+    enabled_rules = [rule for rule in policy.rules if rule.id in enabled_ids]
+
+    evaluations = [
+        evaluate_rule(rule, scope="supplier_admission", facts=fact_values) for rule in enabled_rules
+    ]
+    results = [
+        {"rule_id": evaluation.rule_id, "result": evaluation.result} for evaluation in evaluations
+    ]
+
+    audit_events.append(
+        await append_audit_event(
+            session,
+            subject_type=AuditSubjectType.ADMISSION_CASE,
+            subject_id=admission_case.id,
+            event_type=AuditEventType.RULES_EVALUATED,
+            actor_user_id=actor_user_id,
+            payload={
+                "evaluated_rule_ids": [rule.id for rule in enabled_rules],
+                "results": results,
+            },
+        )
+    )
+
+    hits: list[RuleEvaluation] = [
+        evaluation
+        for evaluation in evaluations
+        if evaluation.result == "hit" and evaluation.outcome is not None
+    ]
+
+    needs_documents = False
+    for evaluation in hits:
+        outcome = evaluation.outcome
+        assert outcome is not None
+        audit_events.append(
+            await append_audit_event(
+                session,
+                subject_type=AuditSubjectType.ADMISSION_CASE,
+                subject_id=admission_case.id,
+                event_type=AuditEventType.RULE_HIT_RECORDED,
+                actor_user_id=actor_user_id,
+                payload={
+                    "rule_id": evaluation.rule_id,
+                    "action": outcome.action,
+                    "reason_code": outcome.reason_code,
+                    "target_case_status": outcome.target_case_status,
+                },
+            )
+        )
+        if outcome.action == "request_documents":
+            needs_documents = True
+
+    if needs_documents:
+        admission_case.status = AdmissionCaseStatus.PENDING_DOCUMENTS
+        await session.flush()
+        audit_events.append(
+            await append_audit_event(
+                session,
+                subject_type=AuditSubjectType.ADMISSION_CASE,
+                subject_id=admission_case.id,
+                event_type=AuditEventType.ADMISSION_CASE_STATUS_CHANGED,
+                actor_user_id=actor_user_id,
+                payload={
+                    "from_status": AdmissionCaseStatus.ANALYZING.value,
+                    "to_status": AdmissionCaseStatus.PENDING_DOCUMENTS.value,
+                },
+            )
+        )
+
+    return admission_case, audit_events

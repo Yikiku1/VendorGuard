@@ -32,6 +32,8 @@ class AuditEventType(StrEnum):
     ADMISSION_CASE_STATUS_CHANGED = "admission_case_status_changed"
     ADMISSION_CASE_DECISION_RECORDED = "admission_case_decision_recorded"
     SUPPLIER_ELIGIBILITY_CHANGED = "supplier_eligibility_changed"
+    RULES_EVALUATED = "rules_evaluated"
+    RULE_HIT_RECORDED = "rule_hit_recorded"
 
 
 _SUBJECT_VALUES_SQL = ", ".join(f"'{subject.value}'" for subject in AuditSubjectType)
