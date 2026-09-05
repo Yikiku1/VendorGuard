@@ -4,7 +4,13 @@ from collections.abc import Mapping
 
 from pydantic import BaseModel, ConfigDict
 
-from .schema import PolicyScope, RuleDefinition, RuleOutcome, RuleResult
+from .schema import (
+    PolicyScope,
+    RuleCondition,
+    RuleDefinition,
+    RuleOutcome,
+    RuleResult,
+)
 
 
 class RuleEvaluation(BaseModel):
@@ -39,11 +45,8 @@ def evaluate_rule(
             outcome=rule.on_missing_input,
         )
 
-    if rule.condition.operator != "in":
-        raise NotImplementedError(f"尚未实现规则运算符: {rule.condition.operator}")
-
     value = facts[field]
-    if value not in rule.condition.value:
+    if not _condition_matches(value, rule.condition):
         return RuleEvaluation(
             rule_id=rule.id,
             result="not_hit",
@@ -54,6 +57,19 @@ def evaluate_rule(
         result="hit",
         outcome=_resolve_hit_outcome(rule.hit_outcome, value),
     )
+
+
+def _condition_matches(value: object, condition: RuleCondition) -> bool:
+    """按条件运算符判断事实是否命中! 未支持的运算符显式抛错。"""
+
+    if condition.operator == "in":
+        return value in condition.value
+    if condition.operator == "equals":
+        # 布尔规则要求事实值类型也必须是 bool, 避免 Python 里 0 == False 的误命中。
+        if isinstance(condition.value, bool):
+            return isinstance(value, bool) and value is condition.value
+        return bool(value == condition.value)
+    raise NotImplementedError(f"尚未实现规则运算符: {condition.operator}")
 
 
 def _resolve_hit_outcome(outcome: RuleOutcome, value: object) -> RuleOutcome:
