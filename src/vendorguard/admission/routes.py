@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
@@ -13,6 +14,7 @@ from vendorguard.admission import (
     AdmissionDecision,
     DocumentType,
     create_admission_case,
+    evaluate_admission_case,
     get_admission_case_detail,
     record_admission_decision,
     register_document_metadata,
@@ -21,6 +23,7 @@ from vendorguard.admission import (
 from vendorguard.audit import AuditEventType, AuditSubjectType
 from vendorguard.database import get_database_session
 from vendorguard.dependencies import get_current_user
+from vendorguard.policy import StructuredFacts, load_policy
 from vendorguard.security import User, UserRole
 from vendorguard.suppliers import (
     Supplier,
@@ -30,6 +33,7 @@ from vendorguard.suppliers import (
 
 router = APIRouter(prefix="/api/admission", tags=["供应商准入"])
 
+DEFAULT_POLICY_PATH = Path("policies/rules/v1.0.0.yaml")
 
 # ==================== Pydantic 模型 ====================
 
@@ -165,6 +169,14 @@ class AdmissionDecisionResponse(BaseModel):
     case_id: UUID
     case_status: AdmissionCaseStatus
     supplier_eligibility: SupplierEligibility | None
+    audit_events: list[AuditEventResponse]
+
+
+class AdmissionEvaluationResponse(BaseModel):
+    """评估端点返回的案件状态与本次追加的审计事件序列。"""
+
+    case_id: UUID
+    case_status: AdmissionCaseStatus
     audit_events: list[AuditEventResponse]
 
 
@@ -466,5 +478,57 @@ async def record_admission_decision_endpoint(
         case_id=admission_case.id,
         case_status=admission_case.status,
         supplier_eligibility=supplier.eligibility_status if supplier is not None else None,
+        audit_events=[AuditEventResponse.model_validate(event) for event in audit_events],
+    )
+
+
+@router.post(
+    "/cases/{admission_case_id}/evaluation",
+    response_model=AdmissionEvaluationResponse,
+)
+async def evaluate_admission_case_endpoint(
+    admission_case_id: UUID,
+    request: StructuredFacts,
+    db: Annotated[AsyncSession, Depends(get_database_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> AdmissionEvaluationResponse:
+    """采购专员对处于 draft 或 pending_documents 的案件发起规则评估。"""
+
+    if current_user.role != UserRole.PROCUREMENT_SPECIALIST:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权限评估准入案件",
+        )
+
+    policy = load_policy(DEFAULT_POLICY_PATH)
+
+    try:
+        result = await evaluate_admission_case(
+            db,
+            admission_case_id=admission_case_id,
+            facts=request,
+            policy=policy,
+            actor_user_id=current_user.id,
+        )
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    if result is None:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="准入案件不存在",
+        )
+
+    admission_case, audit_events = result
+    await db.commit()
+
+    return AdmissionEvaluationResponse(
+        case_id=admission_case.id,
+        case_status=admission_case.status,
         audit_events=[AuditEventResponse.model_validate(event) for event in audit_events],
     )
