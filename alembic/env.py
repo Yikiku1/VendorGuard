@@ -7,6 +7,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from vendorguard.admission import AdmissionCase  # noqa: F401
+from vendorguard.alembic_filters import load_extension_owned_tables, make_include_object
 from vendorguard.audit import AuditEvent  # noqa: F401
 from vendorguard.config import load_settings
 from vendorguard.database import Base, build_database_url
@@ -55,9 +56,17 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    """使用已有同步连接执行迁移。"""
+    """使用已有同步连接执行迁移, 并把扩展自带对象挡在自动比对之外.
 
-    context.configure(connection=connection, target_metadata=target_metadata)
+    include_object 同时作用于 upgrade、downgrade 与 check: 迁移回退时也不会去
+    DROP 别人的扩展表, 这是换镜像后必须保住的一条安全边界.
+    """
+
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_object=make_include_object(load_extension_owned_tables(connection)),
+    )
 
     with context.begin_transaction():
         context.run_migrations()
