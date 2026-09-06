@@ -2,8 +2,10 @@ schema_version: '1.0'
 document_key: demo_supplier_admission_policy_v2
 title: 供应商准入管理办法（演示·现行）
 doc_version: '2.0'
-supersedes: demo_supplier_admission_policy_v1
+supersedes:
+  - demo_supplier_admission_policy_v1
 document_type: policy
+authority: internal
 category: supplier_admission
 audience: procurement
 effective_from: '2026-01-01'

@@ -13,7 +13,14 @@ DocumentType = Literal["policy", "procedure", "reference", "case_lesson"]
 Category = Literal["supplier_admission", "procurement_support", "general_admin"]
 Audience = Literal["procurement", "quality", "all"]
 Modality = Literal["text", "table", "figure"]
-SourceOrigin = Literal["synthetic", "public_template", "desensitized"]
+SourceOrigin = Literal["synthetic", "gov_document", "commercial"]
+Authority = Literal[
+    "law",
+    "administrative_regulation",
+    "department_rule",
+    "platform_rule",
+    "internal",
+]
 
 
 class KnowledgeLoadError(ValueError):
@@ -74,13 +81,16 @@ class KnowledgeDocument(KnowledgeModel):
     document_key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     title: str
     doc_version: str
-    supersedes: str | None = None
+    supersedes: list[str] = Field(default_factory=list)
     document_type: DocumentType
+    authority: Authority
     category: Category
     audience: Audience
     effective_from: date
     effective_until: date | None = None
     source_origin: SourceOrigin
+    source_url: str | None = None
+    retrieved_at: date | None = None
     synthetic_data: bool
     language: Literal["zh-CN"] = "zh-CN"
     honest_scope_notes: list[str] | None = None
@@ -88,7 +98,11 @@ class KnowledgeDocument(KnowledgeModel):
 
     @model_validator(mode="after")
     def validate_document(self) -> KnowledgeDocument:
-        """校验生效期方向、章节键唯一性以及来源与合成标记的自洽。"""
+        """校验生效期方向、章节键唯一性以及来源标注与出处的自洽.
+
+        来源自洽之所以要双向检查: 只查"公开来源必须带出处"挡不住把公开法规标成自制内容来
+        绕过核查, 也只查"自制不得声明合成标记为 false"挡不住自制语料编一个外部 URL 冒充可溯源。
+        """
 
         if self.effective_until is not None and self.effective_until < self.effective_from:
             raise ValueError("生效上限不能早于生效下限")
@@ -97,8 +111,19 @@ class KnowledgeDocument(KnowledgeModel):
         if len(section_keys) != len(set(section_keys)):
             raise ValueError("章节键不能重复")
 
-        if self.source_origin == "synthetic" and not self.synthetic_data:
-            raise ValueError("source_origin 为 synthetic 时必须声明 synthetic_data 为 true")
+        if self.source_origin == "synthetic":
+            if not self.synthetic_data:
+                raise ValueError("source_origin 为 synthetic 时必须声明 synthetic_data 为 true")
+            if self.source_url is not None or self.retrieved_at is not None:
+                raise ValueError(
+                    "自制语料不得声明外部出处, source_url 与 retrieved_at 仅用于公开快照"
+                )
+            return self
+
+        if self.synthetic_data:
+            raise ValueError("公开来源快照不能声明 synthetic_data 为 true")
+        if self.source_url is None or self.retrieved_at is None:
+            raise ValueError("公开来源快照必须同时提供 source_url 与 retrieved_at")
         return self
 
 
@@ -136,11 +161,15 @@ def load_knowledge_catalog(directory: str | Path) -> dict[str, KnowledgeDocument
         catalog[document.document_key] = document
 
     for document in catalog.values():
-        predecessor = document.supersedes
-        if predecessor is not None and predecessor not in catalog:
-            raise KnowledgeLoadError(
-                f"语料 {document.document_key} 的 supersedes 指向不存在的文档: {predecessor}"
-            )
+        for predecessor in document.supersedes:
+            if predecessor == document.document_key:
+                raise KnowledgeLoadError(
+                    f"语料 {document.document_key} 的 supersedes 自引用, 版本链会陷入循环"
+                )
+            if predecessor not in catalog:
+                raise KnowledgeLoadError(
+                    f"语料 {document.document_key} 的 supersedes 指向不存在的文档: {predecessor}"
+                )
 
     return catalog
 

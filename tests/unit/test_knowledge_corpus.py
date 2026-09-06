@@ -79,16 +79,18 @@ def test_case_contract_reference_targets_exist() -> None:
 
 
 def test_version_lineage_is_closed() -> None:
-    """两个版本对的后继都必须指回目录里真实存在的前身."""
+    """版本血缘必须是列表, 且指向目录里真实存在的前身.
+
+    自制侧保留一组 1:1 版本对; 1:N 的真实废止链由公开公文语料承担, 其列表形状已在 Schema 层
+    由 test_catalog_accepts_multiple_predecessors 守住, 这里只验本目录自身的血缘闭合。
+    """
 
     catalog = _catalog()
 
-    assert catalog["demo_supplier_admission_policy_v2"].supersedes == (
+    assert catalog["demo_supplier_admission_policy_v2"].supersedes == [
         "demo_supplier_admission_policy_v1"
-    )
-    assert catalog["demo_supplier_required_documents_policy_v3"].supersedes == (
-        "demo_supplier_required_documents_policy_v2"
-    )
+    ]
+    assert catalog["demo_supplier_required_documents_policy_v3"].supersedes == []
 
 
 def test_effective_state_matches_demo_reference_date() -> None:
@@ -100,7 +102,6 @@ def test_effective_state_matches_demo_reference_date() -> None:
     assert _is_effective(catalog["demo_supplier_required_documents_policy_v3"])
     assert _is_effective(catalog["demo_supplier_quote_policy_v1"])
     assert not _is_effective(catalog["demo_supplier_admission_policy_v1"])
-    assert not _is_effective(catalog["demo_supplier_required_documents_policy_v2"])
 
 
 def test_standard_components_required_set_keeps_case_expected_true() -> None:
@@ -130,11 +131,40 @@ def test_document_key_matches_file_name() -> None:
         assert document.document_key == path.stem, f"{path.name} 的键与文件名不一致"
 
 
-def test_every_corpus_section_has_page_anchor() -> None:
-    """每个章节都要有页码锚点: 章节键已由 Schema 强制, 页码靠本测试补齐另一半."""
+def test_every_corpus_section_has_locator_anchor() -> None:
+    """每个章节都要有定位锚点: 章节键必备, 页码有则必须合法.
+
+    原来这条断言"必须有页码", 那是把 PRD 的"章节或页码"误读成"章节与页码": 法规条文和网页
+    根本没有页码, 硬要页码等于用测试挡死全部真实公开语料。页码保留为可选, 但一旦填写必须 >= 1。
+    """
 
     for document in _catalog().values():
         for section in document.sections:
-            assert section.page is not None and section.page >= 1, (
-                f"{document.document_key}#{section.key} 缺少页码定位锚点"
-            )
+            assert section.key, f"{document.document_key} 存在空章节键"
+            if section.page is not None:
+                assert section.page >= 1, f"{document.document_key}#{section.key} 页码非法"
+
+
+def test_every_corpus_document_declares_scope_notes() -> None:
+    """每篇语料都要带边界声明.
+
+    真实公开文书最容易出的事故不是抓错字, 而是把不适用于本主体的条款当成公司准入依据:
+    例如《企业信息公示暂行条例》第十九条约束的是政府部门在政府采购与工程招投标中的行为,
+    不是民营采购方的义务。honest_scope_notes 非空是这类误用的第一道强制自述。
+    """
+
+    for document in _catalog().values():
+        assert document.honest_scope_notes, f"{document.document_key} 缺少边界声明"
+
+
+def test_external_documents_are_not_marked_synthetic() -> None:
+    """公开公文类语料必须声明非自制来源, 防止把真实法规伪装成自制内容绕过出处校验."""
+
+    for document in _catalog().values():
+        if document.authority == "internal":
+            assert document.source_origin == "synthetic"
+            assert document.synthetic_data is True
+        else:
+            assert document.source_origin != "synthetic"
+            assert document.source_url
+            assert document.retrieved_at

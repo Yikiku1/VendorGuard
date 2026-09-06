@@ -2,8 +2,9 @@ schema_version: '1.0'
 document_key: demo_supplier_quote_policy_v1
 title: 准入报价可比性与偏差复核口径（演示）
 doc_version: '1.0'
-supersedes: null
+supersedes: []
 document_type: procedure
+authority: internal
 category: supplier_admission
 audience: procurement
 effective_from: '2025-06-01'

@@ -33,13 +33,16 @@ def _base_document(**overrides: Any) -> dict[str, Any]:
         "document_key": "demo_supplier_admission_policy_v1",
         "title": "供应商准入管理办法(演示)",
         "doc_version": "1.0",
-        "supersedes": None,
+        "supersedes": [],
         "document_type": "policy",
+        "authority": "internal",
         "category": "supplier_admission",
         "audience": "procurement",
         "effective_from": date(2023, 1, 1),
         "effective_until": date(2025, 12, 31),
         "source_origin": "synthetic",
+        "source_url": None,
+        "retrieved_at": None,
         "synthetic_data": True,
         "language": "zh-CN",
         "honest_scope_notes": ["内容为自制模拟制度, 不代表任何真实企业。"],
@@ -213,35 +216,127 @@ def test_rejects_duplicate_document_keys_in_catalog(tmp_path: Path) -> None:
 def test_rejects_dangling_supersedes_reference(tmp_path: Path) -> None:
     """版本血缘指向不存在的文档, 说明前身被删或键写错, 生效期过滤会失去判据."""
 
-    catalog_path = _catalog_dir(tmp_path, _base_document(supersedes="demo_missing_policy_v0"))
+    catalog_path = _catalog_dir(tmp_path, _base_document(supersedes=["demo_missing_policy_v0"]))
 
     with pytest.raises(KnowledgeLoadError):
         load_knowledge_catalog(catalog_path)
 
 
 def test_catalog_accepts_first_version_without_lineage(tmp_path: Path) -> None:
-    """目录校验负责两件事: 键唯一与血缘可解析; 单文档的 supersedes 为空合法."""
+    """目录校验负责两件事: 键唯一与血缘可解析; 首版文档的 supersedes 为空列表合法."""
 
     catalog = load_knowledge_catalog(_catalog_dir(tmp_path, _base_document()))
 
     assert list(catalog) == ["demo_supplier_admission_policy_v1"]
+    assert catalog["demo_supplier_admission_policy_v1"].supersedes == []
 
 
-def test_catalog_accepts_resolved_supersedes_pair(tmp_path: Path) -> None:
-    """版本对是语料库的既定形状: 后继指向已存在的前身时必须解析成功."""
+def test_catalog_accepts_multiple_predecessors(tmp_path: Path) -> None:
+    """一份文件同时废止多份前身是真实公文的常见形状, 血缘字段必须是列表而非单值.
 
-    expired = _base_document()
+    样本来自辽财采函[2020]198 号: 该通知在文末同时废止了 2010 年和 2017 年两份文件。
+    """
+
+    first = _base_document(document_key="demo_legacy_rule_a_v1")
+    second = _base_document(
+        document_key="demo_legacy_rule_b_v1",
+        supersedes=[],
+    )
     current = _base_document(
-        document_key="demo_supplier_admission_policy_v2",
-        doc_version="2.0",
-        supersedes="demo_supplier_admission_policy_v1",
-        effective_from=date(2026, 1, 1),
+        document_key="demo_current_rule_v3",
+        supersedes=["demo_legacy_rule_a_v1", "demo_legacy_rule_b_v1"],
         effective_until=None,
     )
 
-    catalog = load_knowledge_catalog(_catalog_dir(tmp_path, expired, current))
+    catalog = load_knowledge_catalog(_catalog_dir(tmp_path, first, second, current))
 
-    assert len(catalog) == 2
-    assert catalog["demo_supplier_admission_policy_v2"].supersedes == (
-        "demo_supplier_admission_policy_v1"
+    assert catalog["demo_current_rule_v3"].supersedes == [
+        "demo_legacy_rule_a_v1",
+        "demo_legacy_rule_b_v1",
+    ]
+
+
+def test_rejects_partially_dangling_supersedes_list(tmp_path: Path) -> None:
+    """多前身列表里只要有一项解析不了就必须整体拒绝, 不能只丢掉那一项继续运行."""
+
+    first = _base_document(document_key="demo_legacy_rule_a_v1")
+    current = _base_document(
+        document_key="demo_current_rule_v3",
+        supersedes=["demo_legacy_rule_a_v1", "demo_missing_legacy_rule"],
+        effective_until=None,
     )
+
+    with pytest.raises(KnowledgeLoadError):
+        load_knowledge_catalog(_catalog_dir(tmp_path, first, current))
+
+
+def test_rejects_self_superseding_document(tmp_path: Path) -> None:
+    """文档不能声称取代自己: 自引用在"前身是否存在"这条校验上会蒙混过关.
+
+    这是把 supersedes 从单值改成列表时新出现的 bug 类——遍历列表逐项检查存在性时, 自己必然
+    在目录里, 于是循环血缘能安静通过并让版本链解析陷入自指。
+    """
+
+    catalog_path = _catalog_dir(
+        tmp_path, _base_document(supersedes=["demo_supplier_admission_policy_v1"])
+    )
+
+    with pytest.raises(KnowledgeLoadError):
+        load_knowledge_catalog(catalog_path)
+
+
+def test_rejects_unknown_authority(tmp_path: Path) -> None:
+    """效力层级是白名单字段: 拼错的值若被放过, 引用标注就会静默失效."""
+
+    with pytest.raises(KnowledgeLoadError):
+        load_knowledge_document(
+            _write(tmp_path / "a.yaml", _base_document(authority="national_law"))
+        )
+
+
+def test_rejects_government_document_without_provenance(tmp_path: Path) -> None:
+    """声明为公开公文却没有出处与抓取日期, 等于无法追溯, 必须拒绝.
+
+    这条是"简历项目里的语料必须可核查"的机器化表达: 面试官问出处时不能靠回忆回答。
+    """
+
+    with pytest.raises(KnowledgeLoadError):
+        load_knowledge_document(
+            _write(
+                tmp_path / "a.yaml",
+                _base_document(source_origin="gov_document", synthetic_data=False),
+            )
+        )
+
+
+def test_rejects_synthetic_document_carrying_source_url(tmp_path: Path) -> None:
+    """自制语料却填了外部 URL, 说明来源标注不可信, 两个方向都必须自洽."""
+
+    with pytest.raises(KnowledgeLoadError):
+        load_knowledge_document(
+            _write(
+                tmp_path / "a.yaml",
+                _base_document(source_url="https://example.gov.cn/regulation.html"),
+            )
+        )
+
+
+def test_accepts_government_document_snapshot_with_provenance(tmp_path: Path) -> None:
+    """带文号级出处的公开公文应被接受, 且出处与抓取日期原样落到模型上."""
+
+    document = load_knowledge_document(
+        _write(
+            tmp_path / "a.yaml",
+            _base_document(
+                authority="administrative_regulation",
+                source_origin="gov_document",
+                source_url="https://xzfg.moj.gov.cn/front/law/detail?LawID=1688",
+                retrieved_at=date(2026, 9, 6),
+                synthetic_data=False,
+            ),
+        )
+    )
+
+    assert document.authority == "administrative_regulation"
+    assert document.retrieved_at == date(2026, 9, 6)
+    assert document.supersedes == []

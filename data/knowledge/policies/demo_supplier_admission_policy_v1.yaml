@@ -2,8 +2,9 @@ schema_version: '1.0'
 document_key: demo_supplier_admission_policy_v1
 title: 供应商准入管理办法（演示·已废止）
 doc_version: '1.0'
-supersedes: null
+supersedes: []
 document_type: policy
+authority: internal
 category: supplier_admission
 audience: procurement
 effective_from: '2023-01-01'

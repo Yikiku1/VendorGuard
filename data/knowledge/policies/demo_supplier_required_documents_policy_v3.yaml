@@ -2,8 +2,9 @@ schema_version: '1.0'
 document_key: demo_supplier_required_documents_policy_v3
 title: 分品类必需准入材料清单（演示·现行）
 doc_version: '3.0'
-supersedes: demo_supplier_required_documents_policy_v2
+supersedes: []
 document_type: reference
+authority: internal
 category: supplier_admission
 audience: procurement
 effective_from: '2026-01-01'
@@ -14,6 +15,7 @@ language: zh-CN
 honest_scope_notes:
   - 内容为自制模拟清单，仅用于演示规则与检索行为，不代表任何真实企业的材料要求。
   - 本清单与 VEN-002 的品类必填材料判定共用同一套品类编码，编码取值不建数据库枚举。
+  - 旧的废止版清单未纳入本期十篇基线，因此本文件不声明库内前身。
 sections:
   - key: category_code_mapping
     title: 品类编码与名称对照
