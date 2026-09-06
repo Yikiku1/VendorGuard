@@ -55,17 +55,20 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection: Connection) -> None:
+def do_run_migrations(connection: Connection, excluded_tables: set[str]) -> None:
     """使用已有同步连接执行迁移, 并把扩展自带对象挡在自动比对之外.
 
-    include_object 同时作用于 upgrade、downgrade 与 check: 迁移回退时也不会去
-    DROP 别人的扩展表, 这是换镜像后必须保住的一条安全边界.
+    排除名单由调用方在另一条连接上读好后传进来. 迁移连接一旦被提前查询, SQLAlchemy 会
+    autobegin 一个事务, alembic 接管时复用了它并不拥有的事务边界, commit 会被跳过,
+    表现就是日志显示 Running upgrade、退出码 0、而 alembic_version 一行都没变.
+
+    include_object 同时作用于 upgrade、downgrade 与 check.
     """
 
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
-        include_object=make_include_object(load_extension_owned_tables(connection)),
+        include_object=make_include_object(excluded_tables),
     )
 
     with context.begin_transaction():
@@ -73,7 +76,12 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    """创建异步 Engine 并执行在线迁移。"""
+    """创建异步 Engine 并执行在线迁移.
+
+    读名单与跑迁移各用一条独立连接: NullPool 下每条连接都是真实的新连接, 多一次连接的
+    代价远小于把迁移连接的事务所有权搞混. 读完立刻退出 with 块释放, 保证交给 alembic 的
+    那条连接是干净的.
+    """
 
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
@@ -81,8 +89,11 @@ async def run_async_migrations() -> None:
         poolclass=pool.NullPool,
     )
 
+    async with connectable.connect() as probe:
+        excluded_tables = await probe.run_sync(load_extension_owned_tables)
+
     async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
+        await connection.run_sync(do_run_migrations, excluded_tables)
 
     await connectable.dispose()
 
