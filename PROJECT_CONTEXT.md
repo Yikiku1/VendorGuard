@@ -140,7 +140,7 @@ pytest 仍会报告 FastAPI `TestClient` 与 HTTP 客户端相关的 `StarletteD
 - 供应商申请、材料元数据登记、规则触发补件和一个可验证的失败节点恢复场景
 - 固定结构化事实样例及其模拟页码、单元格或行号来源；不实现真实 PDF、XLSX、CSV 解析
 - `VEN-001`、`VEN-002` 两条启用规则、采购经理通过/拒绝、提交人与审批人隔离和追加式审计
-- 基于 5 篇资料的 PostgreSQL 全文检索、pgvector、简单融合、引用和无证据拒答
+- 基于 10 篇资料的 PostgreSQL 全文检索、pgvector、简单融合、引用和无证据拒答
 - 两个受控 Agent、一个准入 LangGraph、正常与补件两个简化案例、三个前端入口和关键自动化测试
 
 不进入一期：
@@ -150,8 +150,8 @@ pytest 仍会报告 FastAPI `TestClient` 与 HTTP 客户端相关的 `StarletteD
 - 真实 PDF、XLSX、CSV 文件解析和通用文件存储平台
 - 自动签约、自动下 PO、自动付款或自动批准供应商
 - 收货、发票匹配、付款结账、库存 MRP 和复杂预测模型
-- OCR、独立重排模型、复杂评测大屏和真实消息队列
-- 通用文件模板、权限过滤、知识库增量索引和通用检索质量承诺
+- OCR、自建或部署重排模型、复杂评测大屏和真实消息队列
+- 通用文件模板、权限过滤、知识库增量索引；检索指标只以离线脚本输出，不构成在线质量承诺
 - 质量经理业务流程、关键物料双人审批、限时豁免和管理员页面
 - 使用或上传真实供应商、合同、报价、联系人数据
 
@@ -274,13 +274,13 @@ VendorGuard/
 
 2026-09-05 已完成 Day 5：结构化模拟事实层（`StructuredFacts` + `load_demo_case_facts` + 确定性计算）、评估编排 `evaluate_admission_case`（按 `enabled_rule_ids` 评估、驱动 `analyzing`/`pending_documents`、有序审计）、评估端点 `POST /api/admission/cases/{id}/evaluation` 与审计扩展迁移 `0a22cbb97473` 全部通过自动化测试（累计 117 项）。按方案 B，案件本期最远走到 `analyzing`（补件案经 `pending_documents` 可重跑并保留历史命中），`pending_approval` 依赖 Day 6 证据审校未推进，Day 4 完成判定第 2 条据此只部分兑现。
 
-Day 6 起点：建 `data/knowledge/` 五篇制度/案例、最小引用元数据（版本、生效期、页码或章节）、PostgreSQL 全文检索 + pgvector + 简单 RRF 融合、`evidence` 检索接口、5 至 8 个固定问题评测集与稳定“证据不足”拒答；在证据环节落地后，再评估把准入案件从 `analyzing` 经 `evidence_reviewing` 推进到 `pending_approval`，以正式补齐 Day 4 完成判定第 2 条。
+Day 6 起点：建 `data/knowledge/` 十篇制度/案例（公开来源取带出处与抓取日期的文本快照，模拟来源仅用于企业内部制度这类无公开版本的语料）、最小引用元数据（版本、生效期、页码或章节、来源类型与出处）、解析产物清洗与重复段落去重、PostgreSQL 全文检索 + pgvector + 简单 RRF 融合、默认关闭的外部 rerank 接口、`evidence` 检索接口、15 个固定问题评测集与稳定“证据不足”拒答；指标脚本输出 hit@4、MRR、recall@20、无答案精度和引用可定位率，并须通过两项有效性自检（期望引用能在原文命中、打乱目标章节后命中率下降）。不解析真实 PDF、XLSX、CSV 文件。在证据环节落地后，再评估把准入案件从 `analyzing` 经 `evidence_reviewing` 推进到 `pending_approval`，以正式补齐 Day 4 完成判定第 2 条。
 
 ## 开发顺序
 
 1. 完成 `VEN-001`、`VEN-002` 规则执行 ✅，用结构化模拟事实经评估编排跑通正常准入（到 `analyzing`）与规则补件（`VEN-002`→`pending_documents`、可重跑保留历史）✅；推进到 `pending_approval` 待 Day 6 证据审校
 2. 实现采购经理通过/拒绝 ✅、提交人隔离（当前角色模型天然保证，见 `record_admission_decision` docstring）✅、JSON 分析快照（未开始）、追加式审计 ✅
-3. 用 5 篇资料实现全文检索、pgvector、简单融合、引用和无证据拒答
+3. 用 10 篇资料实现全文检索、pgvector、简单融合、引用和无证据拒答
 4. 用 LangGraph 串联两个受控 Agent，验证一个失败节点恢复场景
 5. 完成登录、案件队列、统一案件详情三个前端入口和一条 Playwright 主流程
 6. 完成简单 CI、README、架构图和本地演示说明
