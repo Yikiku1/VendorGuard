@@ -1,0 +1,64 @@
+schema_version: '1.0'
+document_key: demo_supplier_quote_policy_v1
+title: 准入报价可比性与偏差复核口径（演示）
+doc_version: '1.0'
+supersedes: null
+document_type: procedure
+category: supplier_admission
+audience: procurement
+effective_from: '2025-06-01'
+effective_until: null
+source_origin: synthetic
+synthetic_data: true
+language: zh-CN
+honest_scope_notes:
+  - 内容为自制模拟作业口径，阈值不代表任何真实企业的价格政策。
+  - 本制度对应的 VEN-004 在本期属于延期实现规则，制度口径先行入库，规则引擎暂不自动判定。
+sections:
+  - key: scope
+    title: 适用范围
+    page: 1
+    modality: text
+    body: |
+      本口径适用于供应商准入环节提交的报价单复核，包括首次申请与补件后的重新评估。
+      采购例外放行中的价格审查不适用本口径。
+
+  - key: quote_comparability
+    title: 报价可比性判定
+    page: 2
+    modality: text
+    body: |
+      报价只有在与基准价同一比较基础上才算可比，需同时满足：品类与规格相同、计价单位相同、
+      含税口径相同、交付与付款条款相同。任一项不一致即视为不可比。
+      报价不可比时不得直接判定为无风险，也不得判定为命中，必须转人工复核并说明不可比的原因。
+      判定为可比只表示具备比较基础，不代表价格已经通过复核。
+
+  - key: quote_deviation_review
+    title: 报价偏差复核口径
+    page: 3
+    modality: text
+    body: |
+      报价偏差百分比按（报价减去基准价）除以基准价再乘以 100 计算，比较时使用未四舍五入的
+      十进制定点值，只在展示结果时才做格式化。
+      可比报价高于基准价 20% 的，属于价格异常，需要采购经理批准后方可继续准入流程。
+      偏差恰好等于 20% 时不触发审批，只有严格高于 20% 才触发。
+      低于基准价的偏差不构成价格异常，但明显低于成本区间的报价应转人工核实交付能力。
+      示例：报价 810 元、基准价 750 元时偏差为 8%，低于 20%，属于正常区间。
+
+  - key: quote_evidence
+    title: 证据要求
+    page: 4
+    modality: text
+    body: |
+      报价结论必须能定位到报价单中的具体单元格区域，不接受只有汇总数字的结论。
+      基准价必须写明来源，包括同期成交价、框架合同价或市场询价记录三者之一及其单据编号。
+      偏差结论引用报价单区域，基准价结论引用基准价来源，两者不得混用同一个定位符。
+
+  - key: data_missing_handling
+    title: 数据缺失处理
+    page: 5
+    modality: text
+    body: |
+      缺少可比性判定时，不得产出"未命中"结论，应转人工复核。
+      缺少基准价或缺少偏差数值时同样转人工复核，由专员补充计算依据后重新评估。
+      任何情况下都不得为了得到明确结论而推测缺失数据的取值。

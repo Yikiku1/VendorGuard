@@ -1,0 +1,56 @@
+schema_version: '1.0'
+document_key: demo_supplier_required_documents_policy_v2
+title: 分品类必需准入材料清单（演示·已废止）
+doc_version: '2.0'
+supersedes: null
+document_type: reference
+category: supplier_admission
+audience: procurement
+effective_from: '2024-03-01'
+effective_until: '2025-12-31'
+source_origin: synthetic
+synthetic_data: true
+language: zh-CN
+honest_scope_notes:
+  - 内容为自制模拟清单，仅用于演示版本对与生效期过滤，不代表任何真实企业的材料要求。
+  - 本清单已于 2025-12-31 失效，现行集合见 demo_supplier_required_documents_policy_v3。
+sections:
+  - key: category_code_mapping
+    title: 品类名称对照
+    page: 1
+    modality: text
+    body: |
+      本清单使用中文品类名称，未使用品类编码：普通部件、标准件、关键物料三类。
+      其中"标准件"对应现行清单的 standard_fasteners，"普通部件"对应现行清单的 standard_components。
+      本清单未覆盖物流服务品类，物流服务供应商按普通部件处理。
+
+  - key: required_documents_by_category
+    title: 各品类必需材料一览
+    page: 2
+    modality: table
+    body: |
+      | 品类名称 | 材料名称 | 是否必需 | 有效期要求 |
+      | --- | --- | --- | --- |
+      | 普通部件 | 营业执照 | 必需 | 受理日未过期 |
+      | 普通部件 | 报价单 | 必需 | 出具之日起 180 天内 |
+      | 标准件 | 营业执照 | 必需 | 受理日未过期 |
+      | 标准件 | 质量证书 | 非必需 | 不做要求 |
+      | 关键物料 | 营业执照 | 必需 | 受理日未过期 |
+      | 关键物料 | 质量证书 | 非必需 | 不做要求 |
+
+  - key: completeness_judgement
+    title: 材料齐备性判定口径
+    page: 3
+    modality: text
+    body: |
+      必需材料仅包括营业执照与报价单，其余材料缺失不影响齐备性判定。
+      材料不齐全时允许先行通过准入，供应商应在通过后三十个日历日内补交。
+      质量证书在本清单中一律作为非必需材料，关键物料也不例外。
+
+  - key: effect_and_retirement
+    title: 施行与废止
+    page: 4
+    modality: text
+    body: |
+      本清单自 2024-03-01 起施行，至 2025-12-31 失效。
+      失效后一律适用现行清单的品类编码与必需材料集合。

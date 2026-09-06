@@ -1,0 +1,73 @@
+schema_version: '1.0'
+document_key: demo_supplier_admission_policy_v2
+title: 供应商准入管理办法（演示·现行）
+doc_version: '2.0'
+supersedes: demo_supplier_admission_policy_v1
+document_type: policy
+category: supplier_admission
+audience: procurement
+effective_from: '2026-01-01'
+effective_until: null
+source_origin: synthetic
+synthetic_data: true
+language: zh-CN
+honest_scope_notes:
+  - 内容为自制模拟制度，阈值与条款不代表任何真实企业的采购或质量政策。
+  - 本办法是完整制度口径；本期规则引擎只执行 VEN-001 与 VEN-002，其余条款先行入库但不自动判定。
+sections:
+  - key: scope
+    title: 适用范围
+    page: 1
+    modality: text
+    body: |
+      本办法适用于首次申请进入合格供应商清单的供应商准入活动，以及准入材料补交后的复核。
+      已在清单内供应商的年度复核不适用本办法；采购例外放行按采购例外制度单独处理。
+
+  - key: normal_admission
+    title: 正常准入条件
+    page: 2
+    modality: text
+    body: |
+      供应商同时满足下列条件的，方可进入合格供应商清单：
+      一、营业执照未过期且关键字段可辨识；
+      二、营业执照记录的供应商名称、统一社会信用代码与申请表一致；
+      三、已按品类提交《分品类必需准入材料清单》要求的全部必需材料；
+      四、不存在被黑名单制度限制合作的记录。
+      任一条件不满足时，不得由采购专员直接登记，必须转入补件或人工核验环节。
+
+  - key: required_documents
+    title: 必需材料要求
+    page: 3
+    modality: text
+    body: |
+      必需材料按供应商品类确定，具体集合见 demo_supplier_required_documents_policy_v3。
+      必需材料不齐全的准入申请一律转入补件环节，补交完成前不得通过准入。
+      与旧版办法的差别在于：质量证书对关键物料品类属于必需材料，不再允许通过后再补交。
+
+  - key: qualification_document_validity
+    title: 资质与证书材料的有效性
+    page: 4
+    modality: text
+    body: |
+      营业执照、质量证书等带有效期的材料，以材料标注的有效期截止日判断是否过期。
+      有效期截止日当天仍然视为有效；评估日期晚于截止日的，才认定为过期。
+      质量证书剩余有效期不足 90 天的，视为即将失效，需要质量经理复核后方可用于准入。
+      材料无法辨识有效期截止日的，按缺失处理并要求重新提交，不得凭推测填写。
+
+  - key: approval_authority
+    title: 审批权限
+    page: 5
+    modality: text
+    body: |
+      单笔预计采购金额不超过 30000 元的准入申请，由采购经理审批即可。
+      超过 30000 元的准入申请，仍需采购经理审批，但不得由申请人自行批准。
+      关键物料品类的准入申请实行双审批，须由采购经理与质量经理分别批准，任一人不能代表另一角色。
+      多条规则同时要求相同角色时，按角色去重，不重复创建审批任务。
+
+  - key: effect_and_retirement
+    title: 施行与废止
+    page: 6
+    modality: text
+    body: |
+      本办法自 2026-01-01 起施行，同日废止 demo_supplier_admission_policy_v1。
+      2025-12-31 及之前受理的申请按旧版办法执行，但结论不影响现行版本下的重新评估。

@@ -95,7 +95,7 @@ rule_evaluation:
 evidence_review:
   evidence_sufficiency: sufficient
   expected_reference:
-    document_key: demo_supplier_admission_policy_v1
+    document_key: demo_supplier_admission_policy_v2
     section: normal_admission
 
 approval:
