@@ -114,8 +114,6 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("applicability", sa.Text(), nullable=False),
-        sa.Column("canonical_url", sa.Text(), nullable=True),
-        sa.Column("retrieved_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("published_on", sa.Date(), nullable=False),
         sa.Column("effective_from", sa.Date(), nullable=False),
         sa.Column("effective_until", sa.Date(), nullable=True),
@@ -133,11 +131,6 @@ def upgrade() -> None:
             name="knowledge_edition_authority",
         ),
         sa.CheckConstraint(f"role IN ({_ROLES})", name="knowledge_edition_role"),
-        sa.CheckConstraint(
-            "(canonical_url IS NULL AND retrieved_at IS NULL) OR "
-            "(canonical_url IS NOT NULL AND retrieved_at IS NOT NULL)",
-            name="knowledge_edition_provenance",
-        ),
         sa.CheckConstraint(
             "effective_until IS NULL OR effective_until >= effective_from",
             name="knowledge_edition_effective_period",

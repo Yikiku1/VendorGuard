@@ -48,14 +48,9 @@ def test_edition_and_node_tables_keep_replay_fields_and_foreign_keys() -> None:
     node_columns = KnowledgeNodeRecord.__table__.c
     chunk_columns = RetrievalChunkRecord.__table__.c
 
-    assert {
-        "snapshot_sha256",
-        "normalized_sha256",
-        "effective_from",
-        "role",
-        "canonical_url",
-        "retrieved_at",
-    } <= set(edition_columns.keys())
+    assert {"snapshot_sha256", "normalized_sha256", "effective_from", "role"} <= set(
+        edition_columns.keys()
+    )
     assert {"locator", "char_start", "char_end", "body", "body_sha256"} <= set(node_columns.keys())
     assert {"node_body_sha256", "display_text", "search_text", "embedding"} <= set(
         chunk_columns.keys()
