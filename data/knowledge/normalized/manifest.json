@@ -1,0 +1,85 @@
+{
+  "entries": [
+    {
+      "character_count": 601,
+      "edition_key": "demo_supplier_admission_policy_v1",
+      "normalized_path": "normalized/demo_supplier_admission_policy_v1.txt",
+      "normalized_sha256": "8956f7427e19016df72fed0b902a324d1de97850e23d9d236a5ff24a7b778cb8",
+      "processor_version": "1.0",
+      "snapshot_sha256": "8956f7427e19016df72fed0b902a324d1de97850e23d9d236a5ff24a7b778cb8"
+    },
+    {
+      "character_count": 881,
+      "edition_key": "demo_supplier_admission_policy_v2",
+      "normalized_path": "normalized/demo_supplier_admission_policy_v2.txt",
+      "normalized_sha256": "20582feaf7c45d4dda28f8ed44da968dee7edd6ff97badc71ce2dcb950cf6d7b",
+      "processor_version": "1.0",
+      "snapshot_sha256": "20582feaf7c45d4dda28f8ed44da968dee7edd6ff97badc71ce2dcb950cf6d7b"
+    },
+    {
+      "character_count": 1374,
+      "edition_key": "demo_supplier_required_documents_policy_v3",
+      "normalized_path": "normalized/demo_supplier_required_documents_policy_v3.txt",
+      "normalized_sha256": "3359db96c1aab7156b7098b7299259cb6fcf8ad676d441060ce7a81ee0703be6",
+      "processor_version": "1.0",
+      "snapshot_sha256": "3359db96c1aab7156b7098b7299259cb6fcf8ad676d441060ce7a81ee0703be6"
+    },
+    {
+      "character_count": 2796,
+      "edition_key": "market_entity_registration_regulation_v2021",
+      "normalized_path": "normalized/market_entity_registration_regulation_v2021.txt",
+      "normalized_sha256": "51361ac9ba09b274e086e54ac0370e84a2a7a272803478ea85c25ae997aa8a25",
+      "processor_version": "1.0",
+      "snapshot_sha256": "9be4519bf617f56d30cea5339d0afe0c08ac4914e66d8bf9f7813e053421a37d"
+    },
+    {
+      "character_count": 4151,
+      "edition_key": "market_entity_registration_rules_v2022",
+      "normalized_path": "normalized/market_entity_registration_rules_v2022.txt",
+      "normalized_sha256": "60738090d71298f7c65840413b98e36cf4e1c0d75fde1004da79f02d806a1477",
+      "processor_version": "1.0",
+      "snapshot_sha256": "8aed0fa5c368f47162063cf3a9209676f8c59174d65783c9aa4b5da06e2124c5"
+    },
+    {
+      "character_count": 3326,
+      "edition_key": "enterprise_information_publicity_regulation_v2014",
+      "normalized_path": "normalized/enterprise_information_publicity_regulation_v2014.txt",
+      "normalized_sha256": "705809fb65b67e398c17a2a1920b78af1425fb46e46e0125296411b634ae06f8",
+      "processor_version": "1.0",
+      "snapshot_sha256": "9dc3912d8b59118ccef9b1823c120dc8fef84abd7d00d5a58003f73117284504"
+    },
+    {
+      "character_count": 3554,
+      "edition_key": "enterprise_information_publicity_regulation_v2024",
+      "normalized_path": "normalized/enterprise_information_publicity_regulation_v2024.txt",
+      "normalized_sha256": "fda6d074eee0c4afe25dfec875c4fcd987254f106dae97f8a812f1162ca675d3",
+      "processor_version": "1.0",
+      "snapshot_sha256": "3ee0dd82f214501d297cbe9813ff497626c359c71896e9990f7905529f0551c1"
+    },
+    {
+      "character_count": 8346,
+      "edition_key": "certification_and_accreditation_regulation_v2023",
+      "normalized_path": "normalized/certification_and_accreditation_regulation_v2023.txt",
+      "normalized_sha256": "637e09ff8dca9702afd4f9bf7f431714f08a59fcd4a01c2c5e8b30e3d71c3e5c",
+      "processor_version": "1.0",
+      "snapshot_sha256": "51904f527764b8d2669894e83ccf713c27f05026f8c7b4492c792acab5a98ef3"
+    },
+    {
+      "character_count": 4188,
+      "edition_key": "compulsory_product_certification_rules_v2022",
+      "normalized_path": "normalized/compulsory_product_certification_rules_v2022.txt",
+      "normalized_sha256": "9bd4b9a81c4d363db5842923fe3bd2426c139758d9d47b680dbf3a67c37f16ad",
+      "processor_version": "1.0",
+      "snapshot_sha256": "4372cf2c97c26c6fde3c7769b714fca9cf0a976f40ba376f32a435bf8ce849d1"
+    },
+    {
+      "character_count": 4027,
+      "edition_key": "product_quality_law_v2018",
+      "normalized_path": "normalized/product_quality_law_v2018.txt",
+      "normalized_sha256": "16d69c60569895fc85a46491c44d3ea604f47628cb32072b08d496ab5c4528d8",
+      "processor_version": "1.0",
+      "snapshot_sha256": "035972832a37c4d536d493c6710994acc2d20b787c6f9865e990d9563f62ab4c"
+    }
+  ],
+  "processor_version": "1.0"
+}
