@@ -1,0 +1,62 @@
+schema_version: "1.0"
+document_key: certification_and_accreditation_regulation_v2023
+title: 中华人民共和国认证认可条例（2023 年第三次修订·强制认证相关条文库）
+doc_version: "2023-third-revision"
+supersedes: []
+document_type: reference
+authority: administrative_regulation
+category: supplier_admission
+audience: quality
+effective_from: "2003-11-01"
+effective_until: null
+source_origin: gov_document
+source_url: https://xzfg.moj.gov.cn/front/law/detail?LawID=1688
+retrieved_at: "2026-09-06"
+synthetic_data: false
+language: zh-CN
+honest_scope_notes:
+  - 本语料只收录与强制认证和产品证书相关的 6 条，不是条例全文；条例共七十七条，认证机构与检查机构监管章节未纳入。
+  - 生效下限取第七十七条记载的条例原始施行日 2003-11-01，不取修订决定施行日：国家行政法规库把第三次修订记为 2023-07-20，而市场监管总局法规数据库同一词条记为 2023-07-19，两处官方记载存在一日之差，本语料采法规库版本并保留分歧说明，不据此推算具体条款的适用起点。
+  - 本条注意适用边界：第二十七条的强制认证义务以"国家规定相关产品必须经过认证"为前提，即只有列入统一产品目录（CCC 目录）的产品才受该义务约束；本语料未收录当期目录，因此不能凭本条判定某个具体物料是否在目录内。
+  - 第七十条把伪造、冒用认证证书的处理指向《产品质量法》执法，这正是本项目不在系统内实现证书真伪核验的法定理由：真伪查处属执法机关职权，系统只做形式齐备性与类型匹配判断。
+  - 被本条例同时废止的 1991 年《中华人民共和国产品质量认证管理条例》未纳入本期语料库，故不声明库内前身。
+sections:
+  - key: article_23_certificate_issuance
+    title: 第二十三条 认证证书的出具
+    modality: text
+    body: |-
+      第二十三条　认证结论为产品、服务、管理体系符合认证要求的，认证机构应当及时向委托人出具认证证书。
+  - key: article_24_product_vs_management_system
+    title: 第二十四条 产品证书与管理体系证书不得互相冒充
+    modality: text
+    body: |-
+      第二十四条　获得认证证书的，应当在认证范围内使用认证证书和认证标志，不得利用产品、服务认证证书、认证标志和相关文字、符号，误导公众认为其管理体系已通过认证，也不得利用管理体系认证证书、认证标志和相关文字、符号，误导公众认为其产品、服务已通过认证。
+  - key: article_27_mandatory_certification
+    title: 第二十七条 必须认证的产品方可出厂销售进口
+    modality: text
+    body: |-
+      第二十七条　为了保护国家安全、防止欺诈行为、保护人体健康或者安全、保护动植物生命或者健康、保护环境，国家规定相关产品必须经过认证的，应当经过认证并标注认证标志后，方可出厂、销售、进口或者在其他经营活动中使用。
+  - key: article_28_unified_catalog
+    title: 第二十八条 统一产品目录与合格评定程序
+    modality: text
+    body: |-
+      第二十八条　国家对必须经过认证的产品，统一产品目录，统一技术规范的强制性要求、标准和合格评定程序，统一标志，统一收费标准。
+
+      统一的产品目录(以下简称目录)由国务院认证认可监督管理部门会同国务院有关部门制定、调整，由国务院认证认可监督管理部门发布，并会同有关方面共同实施。
+  - key: article_29_designated_certification_body
+    title: 第二十九条 目录内产品须经指定机构认证
+    modality: text
+    body: |-
+      第二十九条　列入目录的产品，必须经国务院认证认可监督管理部门指定的认证机构进行认证。
+
+      列入目录产品的认证标志，由国务院认证认可监督管理部门统一规定。
+  - key: article_70_forgery_enforcement
+    title: 第七十条 伪造冒用证书由产品质量法查处
+    modality: text
+    body: |-
+      第七十条　伪造、冒用、买卖认证标志或者认证证书的，依照《中华人民共和国产品质量法》等法律的规定查处。
+  - key: article_77_effective_and_repeal
+    title: 第七十七条 施行日期与同时废止的旧条例
+    modality: text
+    body: |-
+      第七十七条　本条例自2003年11月1日起施行。1991年5月7日国务院发布的《中华人民共和国产品质量认证管理条例》同时废止。

@@ -168,3 +168,36 @@ def test_external_documents_are_not_marked_synthetic() -> None:
             assert document.source_origin != "synthetic"
             assert document.source_url
             assert document.retrieved_at
+
+
+def test_external_sections_are_verbatim_from_raw_snapshot() -> None:
+    """公开来源语料的每个章节正文, 必须能在同名原文快照里逐字找到.
+
+    这是把"不许编造法条"变成机器判定: source_url 只是自我声明, 快照才是可核对的证据, 而语料
+    正文与快照逐字一致才能保证 YAML 里没有掺进凭记忆补写的内容。一旦某条断言失败, 说明要么
+    转抄时改了字, 要么该章节根本不是从该来源来的——两种情况都必须改语料而不是改测试。
+    """
+
+    raw_dir = KNOWLEDGE_DIR / "raw"
+
+    for document in _catalog().values():
+        if document.source_origin == "synthetic":
+            continue
+
+        snapshot = raw_dir / f"{document.document_key}.md"
+        assert snapshot.exists(), f"{document.document_key} 缺少原文快照 {document.document_key}.md"
+
+        snapshot_text = snapshot.read_text(encoding="utf-8")
+        assert document.source_url is not None
+        assert document.retrieved_at is not None
+        assert document.source_url in snapshot_text, (
+            f"{document.document_key} 的快照未记录 YAML 声明的 source_url"
+        )
+        assert document.retrieved_at.isoformat() in snapshot_text, (
+            f"{document.document_key} 的快照未记录抓取日期 {document.retrieved_at}"
+        )
+
+        for section in document.sections:
+            assert section.body.strip() in snapshot_text, (
+                f"{document.document_key}#{section.key} 正文在原文快照中找不到逐字对应"
+            )
