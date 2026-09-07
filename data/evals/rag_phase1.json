@@ -1,0 +1,306 @@
+{
+  "schema_version": "1.0",
+  "dataset_key": "rag_phase1",
+  "cases": [
+    {
+      "case_id": "rag_phase1_current_admission_license_consistency",
+      "query": "截至 2026-09-01, 供应商准入时营业执照需要与申请表核对哪些字段?",
+      "as_of": "2026-09-01",
+      "kind": "answerable",
+      "expected_outcome": "answerable",
+      "required_slots": [
+        {
+          "slot_key": "current_admission_policy",
+          "targets": [
+            {
+              "edition_key": "demo_supplier_admission_policy_v2",
+              "locator": ["正常准入条件"]
+            }
+          ]
+        }
+      ],
+      "forbidden_edition_keys": [
+        "demo_supplier_admission_policy_v1"
+      ],
+      "required_conditions": []
+    },
+    {
+      "case_id": "rag_phase1_critical_material_quality_certificate",
+      "query": "截至 2026-09-01, critical_material 品类准入是否必须提供质量证书?",
+      "as_of": "2026-09-01",
+      "kind": "answerable",
+      "expected_outcome": "answerable",
+      "required_slots": [
+        {
+          "slot_key": "critical_material_requirement",
+          "targets": [
+            {
+              "edition_key": "demo_supplier_required_documents_policy_v3",
+              "locator": ["关键物料必需材料", "第2行"]
+            }
+          ]
+        }
+      ],
+      "forbidden_edition_keys": [
+        "product_quality_law_v2018"
+      ],
+      "required_conditions": []
+    },
+    {
+      "case_id": "rag_phase1_standard_components_quality_certificate",
+      "query": "截至 2026-09-01, standard_components 品类缺少质量证书是否属于材料不齐?",
+      "as_of": "2026-09-01",
+      "kind": "answerable",
+      "expected_outcome": "answerable",
+      "required_slots": [
+        {
+          "slot_key": "standard_components_requirement",
+          "targets": [
+            {
+              "edition_key": "demo_supplier_required_documents_policy_v3",
+              "locator": ["普通工业部件必需材料", "第4行"]
+            }
+          ]
+        }
+      ],
+      "forbidden_edition_keys": [],
+      "required_conditions": []
+    },
+    {
+      "case_id": "rag_phase1_historical_admission_policy_2025",
+      "query": "截至 2025-12-31, 旧版供应商准入管理办法要求提交哪些正常准入材料?",
+      "as_of": "2025-12-31",
+      "kind": "answerable",
+      "expected_outcome": "answerable",
+      "required_slots": [
+        {
+          "slot_key": "historical_admission_policy",
+          "targets": [
+            {
+              "edition_key": "demo_supplier_admission_policy_v1",
+              "locator": ["正常准入条件"]
+            }
+          ]
+        }
+      ],
+      "forbidden_edition_keys": [
+        "demo_supplier_admission_policy_v2"
+      ],
+      "required_conditions": []
+    },
+    {
+      "case_id": "rag_phase1_publicity_annual_report_2024",
+      "query": "截至 2026-09-01, 企业年度报告通常应在什么期间报送并公示?",
+      "as_of": "2026-09-01",
+      "kind": "answerable",
+      "expected_outcome": "answerable",
+      "required_slots": [
+        {
+          "slot_key": "annual_report_period",
+          "targets": [
+            {
+              "edition_key": "enterprise_information_publicity_regulation_v2024",
+              "locator": ["第八条"]
+            }
+          ]
+        }
+      ],
+      "forbidden_edition_keys": [
+        "enterprise_information_publicity_regulation_v2014"
+      ],
+      "required_conditions": []
+    },
+    {
+      "case_id": "rag_phase1_ccc_product_certification",
+      "query": "已确认产品位于 CCC 目录内时, 该产品销售前需要满足什么认证要求?",
+      "as_of": "2026-09-01",
+      "kind": "answerable",
+      "expected_outcome": "answerable",
+      "required_slots": [
+        {
+          "slot_key": "mandatory_certification_requirement",
+          "targets": [
+            {
+              "edition_key": "certification_and_accreditation_regulation_v2023",
+              "locator": ["第二十七条"]
+            }
+          ]
+        },
+        {
+          "slot_key": "designated_certification_body",
+          "targets": [
+            {
+              "edition_key": "certification_and_accreditation_regulation_v2023",
+              "locator": ["第二十九条"]
+            }
+          ]
+        }
+      ],
+      "forbidden_edition_keys": [],
+      "required_conditions": [
+        "product_in_ccc_directory"
+      ]
+    },
+    {
+      "case_id": "rag_phase1_license_authenticity_no_answer",
+      "query": "仅凭供应商上传的营业执照图片, 能否确认该营业执照真实有效且属于该供应商?",
+      "as_of": "2026-09-01",
+      "kind": "no_answer",
+      "expected_outcome": "no_answer",
+      "required_slots": [],
+      "forbidden_edition_keys": [
+        "demo_supplier_admission_policy_v2",
+        "market_entity_registration_regulation_v2021",
+        "market_entity_registration_rules_v2022"
+      ],
+      "required_conditions": []
+    },
+    {
+      "case_id": "rag_phase1_quality_certificate_without_category_no_answer",
+      "query": "未提供供应商品类时, 能否直接要求所有供应商提交质量证书?",
+      "as_of": "2026-09-01",
+      "kind": "no_answer",
+      "expected_outcome": "no_answer",
+      "required_slots": [],
+      "forbidden_edition_keys": [
+        "demo_supplier_required_documents_policy_v3",
+        "certification_and_accreditation_regulation_v2023"
+      ],
+      "required_conditions": []
+    },
+    {
+      "case_id": "rag_phase1_ccc_catalog_membership_no_answer",
+      "query": "仅知道供应商提供的是工业零部件, 能否根据一期语料判断该产品属于 CCC 目录?",
+      "as_of": "2026-09-01",
+      "kind": "no_answer",
+      "expected_outcome": "no_answer",
+      "required_slots": [],
+      "forbidden_edition_keys": [
+        "certification_and_accreditation_regulation_v2023",
+        "compulsory_product_certification_rules_v2022"
+      ],
+      "required_conditions": []
+    },
+    {
+      "case_id": "rag_phase1_tax_amount_material_no_answer",
+      "query": "供应商未公开纳税总额时, 能否依据一期语料直接判定其准入材料不齐?",
+      "as_of": "2026-09-01",
+      "kind": "no_answer",
+      "expected_outcome": "no_answer",
+      "required_slots": [],
+      "forbidden_edition_keys": [
+        "enterprise_information_publicity_regulation_v2024"
+      ],
+      "required_conditions": []
+    },
+    {
+      "case_id": "rag_phase1_retired_policy_late_quality_certificate",
+      "query": "截至 2026-09-01, critical_material 品类是否可以先通过准入, 再补交质量证书?",
+      "as_of": "2026-09-01",
+      "kind": "adversarial_negative",
+      "expected_outcome": "answerable",
+      "required_slots": [
+        {
+          "slot_key": "current_critical_material_requirement",
+          "targets": [
+            {
+              "edition_key": "demo_supplier_required_documents_policy_v3",
+              "locator": ["关键物料必需材料", "第2行"]
+            }
+          ]
+        },
+        {
+          "slot_key": "current_material_completion_rule",
+          "targets": [
+            {
+              "edition_key": "demo_supplier_admission_policy_v2",
+              "locator": ["必需材料要求"]
+            }
+          ]
+        }
+      ],
+      "forbidden_edition_keys": [
+        "demo_supplier_admission_policy_v1"
+      ],
+      "required_conditions": []
+    },
+    {
+      "case_id": "rag_phase1_future_publicity_version_2023",
+      "query": "截至 2023-12-31, 企业年度报告应在什么期间报送并公示?",
+      "as_of": "2023-12-31",
+      "kind": "adversarial_negative",
+      "expected_outcome": "answerable",
+      "required_slots": [
+        {
+          "slot_key": "historical_annual_report_period",
+          "targets": [
+            {
+              "edition_key": "enterprise_information_publicity_regulation_v2014",
+              "locator": ["第八条"]
+            }
+          ]
+        }
+      ],
+      "forbidden_edition_keys": [
+        "enterprise_information_publicity_regulation_v2024"
+      ],
+      "required_conditions": []
+    },
+    {
+      "case_id": "rag_phase1_current_publicity_version_2026",
+      "query": "截至 2026-09-01, 哪个版本规定政府部门可在政府采购中将经营异常名录作为重要考量因素?",
+      "as_of": "2026-09-01",
+      "kind": "adversarial_negative",
+      "expected_outcome": "answerable",
+      "required_slots": [
+        {
+          "slot_key": "current_government_procurement_reference",
+          "targets": [
+            {
+              "edition_key": "enterprise_information_publicity_regulation_v2024",
+              "locator": ["第十九条"]
+            }
+          ]
+        }
+      ],
+      "forbidden_edition_keys": [
+        "enterprise_information_publicity_regulation_v2014"
+      ],
+      "required_conditions": []
+    },
+    {
+      "case_id": "rag_phase1_government_duty_as_internal_rule_no_answer",
+      "query": "本公司作为制造企业, 能否依据企业信息公示条例直接把经营异常名录供应商一律拒绝准入?",
+      "as_of": "2026-09-01",
+      "kind": "adversarial_negative",
+      "expected_outcome": "no_answer",
+      "required_slots": [],
+      "forbidden_edition_keys": [
+        "enterprise_information_publicity_regulation_v2024"
+      ],
+      "required_conditions": []
+    },
+    {
+      "case_id": "rag_phase1_voluntary_certification_overrides_policy",
+      "query": "产品质量法规定认证可自愿申请, 是否意味着 critical_material 品类永远不必提交质量证书?",
+      "as_of": "2026-09-01",
+      "kind": "adversarial_negative",
+      "expected_outcome": "answerable",
+      "required_slots": [
+        {
+          "slot_key": "internal_critical_material_requirement",
+          "targets": [
+            {
+              "edition_key": "demo_supplier_required_documents_policy_v3",
+              "locator": ["关键物料必需材料", "第2行"]
+            }
+          ]
+        }
+      ],
+      "forbidden_edition_keys": [
+        "product_quality_law_v2018"
+      ],
+      "required_conditions": []
+    }
+  ]
+}
