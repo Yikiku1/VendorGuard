@@ -58,6 +58,9 @@ def test_plan_binds_every_frozen_edition_to_verified_nodes_and_chunks() -> None:
     assert editions["enterprise_information_publicity_regulation_v2024"].canonical_url == (
         "https://xzfg.moj.gov.cn/front/law/detail?LawID=1718"
     )
+    assert editions["compulsory_product_certification_rules_v2022"].required_conditions == {
+        "product_in_ccc_directory"
+    }
     assert all(chunk.node_key in node_keys for chunk in plan.chunks)
     assert all(chunk.display_text in chunk.search_text for chunk in plan.chunks)
 

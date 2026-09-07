@@ -53,6 +53,7 @@ def test_edition_and_node_tables_keep_replay_fields_and_foreign_keys() -> None:
         "normalized_sha256",
         "effective_from",
         "role",
+        "required_conditions",
         "canonical_url",
         "retrieved_at",
     } <= set(edition_columns.keys())

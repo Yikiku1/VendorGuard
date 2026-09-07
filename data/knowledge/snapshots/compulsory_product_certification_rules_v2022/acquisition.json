@@ -11,6 +11,9 @@
   "published_on": "2022-09-29",
   "publisher": "国家市场监督管理总局",
   "retrieved_at": "2026-09-06T13:28:12Z",
+  "required_conditions": [
+    "product_in_ccc_directory"
+  ],
   "role": "conditional_reference",
   "snapshot_path": "snapshots/compulsory_product_certification_rules_v2022/original.html",
   "snapshot_sha256": "4372cf2c97c26c6fde3c7769b714fca9cf0a976f40ba376f32a435bf8ce849d1",

@@ -54,6 +54,7 @@ class KnowledgeEditionInput:
     authority: KnowledgeAuthority
     role: KnowledgeRole
     applicability: str
+    required_conditions: frozenset[str]
     canonical_url: str | None
     retrieved_at: datetime | None
     published_on: date
@@ -123,6 +124,28 @@ def _optional_string(entry: Mapping[str, object], field: str, edition_key: str) 
     if not isinstance(value, str) or not value:
         raise CorpusIngestionError(f"版本 {edition_key} 的字段类型无效: {field}")
     return value
+
+
+def _required_conditions(
+    entry: Mapping[str, object],
+    role: KnowledgeRole,
+    edition_key: str,
+) -> frozenset[str]:
+    """读取机器可执行的适用条件, 防止条件性法规退化为自然语言备注。"""
+
+    raw_conditions = entry.get("required_conditions", [])
+    if not isinstance(raw_conditions, list) or not all(
+        isinstance(condition, str) and condition for condition in raw_conditions
+    ):
+        raise CorpusIngestionError(f"版本 {edition_key} 的 required_conditions 必须是字符串数组")
+    conditions = frozenset(raw_conditions)
+    if len(conditions) != len(raw_conditions):
+        raise CorpusIngestionError(f"版本 {edition_key} 的 required_conditions 不能重复")
+    if role == KnowledgeRole.CONDITIONAL_REFERENCE and not conditions:
+        raise CorpusIngestionError(f"条件性版本 {edition_key} 必须声明 required_conditions")
+    if role != KnowledgeRole.CONDITIONAL_REFERENCE and conditions:
+        raise CorpusIngestionError(f"非条件性版本 {edition_key} 不得声明 required_conditions")
+    return conditions
 
 
 def _required_entries(payload: Mapping[str, object], name: str) -> list[dict[str, object]]:
@@ -291,14 +314,16 @@ def load_frozen_corpus_plan(
         if len(supersedes) != len(set(supersedes)) or edition_key in supersedes:
             raise CorpusIngestionError(f"版本 {edition_key} 的 supersedes 无效")
 
+        role = KnowledgeRole(_required_string(entry, "role", edition_key))
         edition = KnowledgeEditionInput(
             edition_key=edition_key,
             source_key=source_key,
             title=_required_string(entry, "title", edition_key),
             version=_required_string(entry, "version", edition_key),
             authority=KnowledgeAuthority(_required_string(entry, "authority", edition_key)),
-            role=KnowledgeRole(_required_string(entry, "role", edition_key)),
+            role=role,
             applicability=_required_string(entry, "applicability", edition_key),
+            required_conditions=_required_conditions(entry, role, edition_key),
             canonical_url=canonical_url,
             retrieved_at=retrieved_at,
             published_on=_parse_date(
@@ -416,6 +441,7 @@ async def ingest_frozen_corpus(
                 "authority": edition.authority,
                 "role": edition.role,
                 "applicability": edition.applicability,
+                "required_conditions": sorted(edition.required_conditions),
                 "canonical_url": edition.canonical_url,
                 "retrieved_at": edition.retrieved_at,
                 "published_on": edition.published_on,

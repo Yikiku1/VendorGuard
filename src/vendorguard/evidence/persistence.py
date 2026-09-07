@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -166,6 +167,12 @@ class KnowledgeEditionRecord(Base):
         nullable=False,
     )
     applicability: Mapped[str] = mapped_column(Text, nullable=False)
+    required_conditions: Mapped[list[str]] = mapped_column(
+        JSONB,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+        nullable=False,
+    )
     canonical_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_on: Mapped[date] = mapped_column(Date, nullable=False)
