@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 DocumentType = Literal["policy", "procedure", "reference", "case_lesson"]
 Category = Literal["supplier_admission", "procurement_support", "general_admin"]
@@ -35,6 +42,128 @@ class KnowledgeModel(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+
+class KnowledgeSource(KnowledgeModel):
+    """保存知识来源的稳定身份, 不承载某一版本的具体正文。
+
+    例如"国家行政法规库"是一个来源; 同一法规的 2014 年版和 2024 年版
+    则属于这个来源下不同的 KnowledgeEdition。
+    """
+
+    source_key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    title: str = Field(min_length=1)
+    publisher: str = Field(min_length=1)
+    source_origin: SourceOrigin
+    canonical_url: str | None = None
+    retrieved_at: datetime | None = None
+
+    @field_validator("canonical_url")
+    @classmethod
+    def validate_canonical_url(cls, value: str | None) -> str | None:
+        """公开来源地址必须是可明确记录的 HTTP(S) 地址。"""
+
+        if value is not None and not value.startswith(("https://", "http://")):
+            raise ValueError("来源地址必须使用 HTTP 或 HTTPS")
+        return value
+
+    @model_validator(mode="after")
+    def validate_provenance(self) -> KnowledgeSource:
+        """校验来源类型, 外部地址和抓取时间之间的一致性。"""
+
+        if self.source_origin == "synthetic":
+            if self.canonical_url is not None or self.retrieved_at is not None:
+                raise ValueError("自制来源不得声明外部地址或抓取时间")
+            return self
+
+        if self.canonical_url is None or self.retrieved_at is None:
+            raise ValueError("公开来源必须声明地址和抓取时间")
+
+        # 统一要求时区, 避免跨机器或夏令时环境下无法准确回放抓取时间。
+        if self.retrieved_at.utcoffset() is None:
+            raise ValueError("公开来源的抓取时间必须包含时区")
+
+        return self
+
+
+class KnowledgeEdition(KnowledgeModel):
+    """保存一份不可变, 可按案件日期判断效力的知识版本快照。
+
+    版本一经创建不得修改。法规或制度修订时, 必须创建新版本, 并通过
+    supersedes 指向被替代的历史版本, 保证旧案件仍可回放原始引用。
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    edition_key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    source_key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    title: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    published_on: date
+    effective_from: date
+    effective_until: date | None = None
+    snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    supersedes: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_edition(self) -> KnowledgeEdition:
+        """校验生效期和版本血缘不会产生内部矛盾。"""
+
+        if self.effective_until is not None and self.effective_until < self.effective_from:
+            raise ValueError("失效日期不能早于生效日期")
+
+        if self.edition_key in self.supersedes:
+            raise ValueError("版本不能替代自身")
+
+        if len(self.supersedes) != len(set(self.supersedes)):
+            raise ValueError("supersedes 不能包含重复版本")
+
+        return self
+
+    def is_effective_on(self, as_of: date) -> bool:
+        """按项目既有闭区间语义判断版本在指定日期是否有效。"""
+
+        return self.effective_from <= as_of and (
+            self.effective_until is None or as_of <= self.effective_until
+        )
+
+
+class KnowledgeCorpusManifest(KnowledgeModel):
+    """聚合知识来源与版本快照的最小语料清单。
+
+    后续检索入库只接收已通过此模型校验的清单, 而不是分别接收
+    来源和版本列表。
+    """
+
+    sources: tuple[KnowledgeSource, ...]
+    editions: tuple[KnowledgeEdition, ...]
+
+    @model_validator(mode="after")
+    def validate_references(self) -> KnowledgeCorpusManifest:
+        """校验来源唯一性, 版本唯一性和同源版本血缘。"""
+
+        source_by_key = {source.source_key: source for source in self.sources}
+        if len(source_by_key) != len(self.sources):
+            raise ValueError("source_key 不能重复")
+
+        edition_by_key = {edition.edition_key: edition for edition in self.editions}
+        if len(edition_by_key) != len(self.editions):
+            raise ValueError("edition_key 不能重复")
+
+        for edition in self.editions:
+            if edition.source_key not in source_by_key:
+                raise ValueError(f"版本引用了不存在的来源: {edition.source_key}")
+
+            for predecessor_key in edition.supersedes:
+                predecessor = edition_by_key.get(predecessor_key)
+
+                if predecessor is None:
+                    raise ValueError(f"版本替代了不存在的前身: {predecessor_key}")
+
+                if predecessor.source_key != edition.source_key:
+                    raise ValueError("版本只能替代同一来源的前身")
+
+        return self
 
 
 def _contains_markdown_table(body: str) -> bool:
@@ -175,9 +304,12 @@ def load_knowledge_catalog(directory: str | Path) -> dict[str, KnowledgeDocument
 
 
 __all__ = [
+    "KnowledgeCorpusManifest",
     "KnowledgeDocument",
+    "KnowledgeEdition",
     "KnowledgeLoadError",
     "KnowledgeSection",
+    "KnowledgeSource",
     "load_knowledge_catalog",
     "load_knowledge_document",
 ]

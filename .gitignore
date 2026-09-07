@@ -28,3 +28,6 @@ logs/
 *.sqlite3
 
 .qoder/
+
+# Local RAG work tracking
+/project_docs/VendorGuard-RAG重构待办.md
