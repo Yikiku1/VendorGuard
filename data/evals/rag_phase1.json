@@ -1,0 +1,270 @@
+{
+  "schema_version": "1.0",
+  "corpus_key": "vendorguard_rag_phase_1",
+  "cases": [
+    {
+      "case_key": "license_identity_current_policy",
+      "kind": "answerable",
+      "query": "2026 年供应商准入时, 营业执照上的名称和统一社会信用代码是否必须与申请表一致?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "sufficient",
+      "required_slots": [
+        {
+          "slot_key": "current_internal_license_identity_rule",
+          "accepted_citations": [
+            {
+              "edition_key": "demo_supplier_admission_policy_v2",
+              "node_type": "item",
+              "locator": ["供应商准入管理办法(演示, 现行)", "正常准入条件", "二、"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_key": "standard_components_required_license",
+      "kind": "answerable",
+      "query": "普通工业部件供应商必须提交营业执照吗?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "sufficient",
+      "required_slots": [
+        {
+          "slot_key": "standard_components_license_requirement",
+          "accepted_citations": [
+            {
+              "edition_key": "demo_supplier_required_documents_policy_v3",
+              "node_type": "table_row",
+              "locator": ["分品类必需准入材料清单(演示, 现行)", "普通工业部件必需材料", "表格", "第16行"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_key": "critical_material_quality_certificate",
+      "kind": "answerable",
+      "query": "关键物料品类的准入申请是否必须提交质量证书?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "sufficient",
+      "required_slots": [
+        {
+          "slot_key": "critical_material_quality_certificate_requirement",
+          "accepted_citations": [
+            {
+              "edition_key": "demo_supplier_required_documents_policy_v3",
+              "node_type": "table_row",
+              "locator": ["分品类必需准入材料清单(演示, 现行)", "关键物料必需材料", "表格", "第34行"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_key": "certificate_expiry_boundary",
+      "kind": "answerable",
+      "query": "营业执照或质量证书在有效期截止日当天是否仍可用于供应商准入?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "sufficient",
+      "required_slots": [
+        {
+          "slot_key": "current_internal_expiry_boundary_rule",
+          "accepted_citations": [
+            {
+              "edition_key": "demo_supplier_admission_policy_v2",
+              "node_type": "paragraph",
+              "locator": ["供应商准入管理办法(演示, 现行)", "资质与证书材料的有效性", "正文"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_key": "critical_material_dual_approval",
+      "kind": "answerable",
+      "query": "关键物料供应商准入需要哪些角色审批?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "sufficient",
+      "required_slots": [
+        {
+          "slot_key": "current_internal_approval_rule",
+          "accepted_citations": [
+            {
+              "edition_key": "demo_supplier_admission_policy_v2",
+              "node_type": "paragraph",
+              "locator": ["供应商准入管理办法(演示, 现行)", "审批权限", "正文"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_key": "electronic_license_legal_effect",
+      "kind": "answerable",
+      "query": "电子营业执照与纸质营业执照是否具有同等法律效力?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "sufficient",
+      "required_slots": [
+        {
+          "slot_key": "registration_regulation_background",
+          "accepted_citations": [
+            {
+              "edition_key": "market_entity_registration_regulation_v2021",
+              "node_type": "paragraph",
+              "locator": ["第三章 登记规范", "第二十二条", "正文"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_key": "tax_certificate_is_not_in_internal_list",
+      "kind": "no_answer",
+      "query": "现行供应商准入制度是否要求所有品类提交完税证明?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "insufficient",
+      "prohibited_citations": [
+        {
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "node_type": "table_row",
+          "locator": ["分品类必需准入材料清单(演示, 现行)", "普通工业部件必需材料", "表格", "第16行"]
+        }
+      ]
+    },
+    {
+      "case_key": "registration_law_is_not_vendor_policy",
+      "kind": "no_answer",
+      "query": "市场主体登记管理条例是否规定供应商准入必须提交质量证书?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "insufficient",
+      "prohibited_citations": [
+        {
+          "edition_key": "market_entity_registration_regulation_v2021",
+          "node_type": "paragraph",
+          "locator": ["第三章 登记规范", "第十六条", "正文"]
+        }
+      ]
+    },
+    {
+      "case_key": "ccc_without_product_scope_is_insufficient",
+      "kind": "no_answer",
+      "query": "普通工业部件供应商是否一律必须提交 CCC 认证证书?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "insufficient",
+      "prohibited_citations": [
+        {
+          "edition_key": "compulsory_product_certification_rules_v2022",
+          "node_type": "paragraph",
+          "locator": ["第二条", "正文"]
+        }
+      ]
+    },
+    {
+      "case_key": "logistics_warranty_period_is_not_defined",
+      "kind": "no_answer",
+      "query": "物流服务供应商的准入合同保修期最短是多少个月?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "insufficient",
+      "prohibited_citations": [
+        {
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "node_type": "table_row",
+          "locator": ["分品类必需准入材料清单(演示, 现行)", "物流服务必需材料", "表格", "第43行"]
+        }
+      ]
+    },
+    {
+      "case_key": "retired_internal_policy_cannot_apply_in_2026",
+      "kind": "adversarial_negative",
+      "query": "2026 年供应商材料齐备后, 采购专员能否按旧办法直接登记且无需审批?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "insufficient",
+      "prohibited_citations": [
+        {
+          "edition_key": "demo_supplier_admission_policy_v1",
+          "node_type": "paragraph",
+          "locator": ["供应商准入管理办法(演示, 已废止)", "正常准入条件", "正文"]
+        }
+      ]
+    },
+    {
+      "case_key": "future_publicity_edition_cannot_apply_in_2020",
+      "kind": "adversarial_negative",
+      "query": "2020 年可以依据 2024 年修订的企业信息公示条例处理企业信息非法修改吗?",
+      "as_of": "2020-01-01",
+      "expected_outcome": "insufficient",
+      "prohibited_citations": [
+        {
+          "edition_key": "enterprise_information_publicity_regulation_v2024",
+          "node_type": "paragraph",
+          "locator": ["第十七条", "正文"]
+        }
+      ]
+    },
+    {
+      "case_key": "government_duty_is_not_supplier_requirement",
+      "kind": "adversarial_negative",
+      "query": "市场监管部门主管登记工作, 是否因此可以把该政府职责当作供应商准入材料要求?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "insufficient",
+      "prohibited_citations": [
+        {
+          "edition_key": "market_entity_registration_regulation_v2021",
+          "node_type": "paragraph",
+          "locator": ["第五条", "正文"]
+        }
+      ]
+    },
+    {
+      "case_key": "voluntary_quality_law_does_not_override_internal_rule",
+      "kind": "adversarial_negative",
+      "query": "产品质量法提到认证自愿, 是否意味着关键物料准入不需要质量证书?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "sufficient",
+      "required_slots": [
+        {
+          "slot_key": "current_internal_critical_material_requirement",
+          "accepted_citations": [
+            {
+              "edition_key": "demo_supplier_required_documents_policy_v3",
+              "node_type": "table_row",
+              "locator": ["分品类必需准入材料清单(演示, 现行)", "关键物料必需材料", "表格", "第34行"]
+            }
+          ]
+        }
+      ],
+      "prohibited_citations": [
+        {
+          "edition_key": "product_quality_law_v2018",
+          "node_type": "paragraph",
+          "locator": ["第二章 产品质量的监督", "第十四条", "正文"]
+        }
+      ]
+    },
+    {
+      "case_key": "current_publicity_edition_beats_retired_edition",
+      "kind": "adversarial_negative",
+      "query": "2026 年企业是否可以非法修改已公示的企业信息?",
+      "as_of": "2026-09-01",
+      "expected_outcome": "sufficient",
+      "required_slots": [
+        {
+          "slot_key": "current_publicity_prohibition",
+          "accepted_citations": [
+            {
+              "edition_key": "enterprise_information_publicity_regulation_v2024",
+              "node_type": "paragraph",
+              "locator": ["第十七条", "正文"]
+            }
+          ]
+        }
+      ],
+      "prohibited_citations": [
+        {
+          "edition_key": "enterprise_information_publicity_regulation_v2014",
+          "node_type": "paragraph",
+          "locator": ["第十七条", "正文"]
+        }
+      ]
+    }
+  ]
+}
