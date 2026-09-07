@@ -31,3 +31,7 @@ logs/
 
 # Local RAG work tracking
 /project_docs/VendorGuard-RAG重构待办.md
+project_docs/VendorGuard-对话式待办卡片工具调研.md
+project_docs/VendorGuard-RAG检索栈交接.md
+project_docs/VendorGuard-RAG重构资料调研.md
+project_docs/VendorGuard-RAG语料候选与来源核验.md
