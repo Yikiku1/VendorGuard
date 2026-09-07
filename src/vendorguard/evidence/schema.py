@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
@@ -27,6 +28,16 @@ Authority = Literal[
     "department_rule",
     "platform_rule",
     "internal",
+]
+NodeType = Literal[
+    "document",
+    "chapter",
+    "section",
+    "article",
+    "paragraph",
+    "item",
+    "table",
+    "table_row",
 ]
 
 
@@ -162,6 +173,60 @@ class KnowledgeCorpusManifest(KnowledgeModel):
 
                 if predecessor.source_key != edition.source_key:
                     raise ValueError("版本只能替代同一来源的前身")
+
+        return self
+
+
+class KnowledgeNode(KnowledgeModel):
+    """保存可回放的不可变结构节点, 是最终引用的最小单位。
+
+    `char_start` 与 `char_end` 指向 `normalized_sha256` 对应的规范正文。
+    `snapshot_sha256` 则将规范正文回连至冻结的原始字节, 避免把网页标记
+    的字符偏移误作法规正文的位置。
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    node_key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    edition_key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    parent_node_key: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+    node_type: NodeType
+    locator: tuple[str, ...] = Field(min_length=1)
+    snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    normalized_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    char_start: int = Field(ge=0)
+    char_end: int = Field(ge=1)
+    body: str = Field(min_length=1)
+    body_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("locator")
+    @classmethod
+    def validate_locator(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """定位符各层必须有可显示的结构文本。"""
+
+        if any(not part.strip() for part in value):
+            raise ValueError("定位符不能包含空层级")
+        return value
+
+    @model_validator(mode="after")
+    def validate_verbatim_reference(self) -> KnowledgeNode:
+        """校验层级关系, 正文区间和哈希可精确回放。"""
+
+        if self.parent_node_key == self.node_key:
+            raise ValueError("节点不能将自身设为父节点")
+
+        if self.char_end <= self.char_start:
+            raise ValueError("字符区间终点必须晚于起点")
+
+        if self.char_end - self.char_start != len(self.body):
+            raise ValueError("字符区间长度必须等于原文正文长度")
+
+        expected_hash = sha256(self.body.encode("utf-8")).hexdigest()
+        if self.body_sha256 != expected_hash:
+            raise ValueError("正文哈希必须与原文正文一致")
 
         return self
 
@@ -308,6 +373,7 @@ __all__ = [
     "KnowledgeDocument",
     "KnowledgeEdition",
     "KnowledgeLoadError",
+    "KnowledgeNode",
     "KnowledgeSection",
     "KnowledgeSource",
     "load_knowledge_catalog",
