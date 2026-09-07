@@ -121,7 +121,7 @@ class KnowledgeSourceRecord(Base):
 
 
 class KnowledgeEditionRecord(Base):
-    """保存一份不可变知识版本与其正式语料角色和有效期。"""
+    """保存一份不可变知识版本与其确切快照出处、角色和有效期。"""
 
     __tablename__ = "knowledge_editions"
     __table_args__ = (
@@ -130,6 +130,11 @@ class KnowledgeEditionRecord(Base):
             name="knowledge_edition_authority",
         ),
         CheckConstraint(f"role IN ({_ROLE_VALUES_SQL})", name="knowledge_edition_role"),
+        CheckConstraint(
+            "(canonical_url IS NULL AND retrieved_at IS NULL) OR "
+            "(canonical_url IS NOT NULL AND retrieved_at IS NOT NULL)",
+            name="knowledge_edition_provenance",
+        ),
         CheckConstraint(
             "effective_until IS NULL OR effective_until >= effective_from",
             name="knowledge_edition_effective_period",
@@ -161,6 +166,8 @@ class KnowledgeEditionRecord(Base):
         nullable=False,
     )
     applicability: Mapped[str] = mapped_column(Text, nullable=False)
+    canonical_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_on: Mapped[date] = mapped_column(Date, nullable=False)
     effective_from: Mapped[date] = mapped_column(Date, nullable=False)
     effective_until: Mapped[date | None] = mapped_column(Date, nullable=True)
