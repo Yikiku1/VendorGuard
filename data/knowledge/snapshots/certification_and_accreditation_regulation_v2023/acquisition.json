@@ -11,9 +11,6 @@
   "published_on": "2023-07-20",
   "publisher": "国务院",
   "retrieved_at": "2026-09-06T13:28:12Z",
-  "required_conditions": [
-    "product_requires_certification"
-  ],
   "role": "conditional_reference",
   "snapshot_path": "snapshots/certification_and_accreditation_regulation_v2023/original.html",
   "snapshot_sha256": "51904f527764b8d2669894e83ccf713c27f05026f8c7b4492c792acab5a98ef3",
