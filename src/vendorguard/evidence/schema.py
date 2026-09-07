@@ -231,6 +231,47 @@ class KnowledgeNode(KnowledgeModel):
         return self
 
 
+class RetrievalChunk(KnowledgeModel):
+    """保存用于召回的不可变检索投影, 不能作为最终引用单位。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    chunk_key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    edition_key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    node_key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    normalized_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    node_body_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    char_start: int = Field(ge=0)
+    char_end: int = Field(ge=1)
+    display_text: str = Field(min_length=1)
+    search_text: str = Field(min_length=1)
+
+    @field_validator("display_text", "search_text")
+    @classmethod
+    def validate_nonblank_text(cls, value: str) -> str:
+        """展示文本与检索文本均不得只包含空白字符。"""
+
+        if not value.strip():
+            raise ValueError("文本不能为空")
+        return value
+
+    @model_validator(mode="after")
+    def validate_projection(self) -> RetrievalChunk:
+        """校验检索投影能回指节点正文且保留展示原文。"""
+
+        if self.char_end <= self.char_start:
+            raise ValueError("字符区间终点必须晚于起点")
+
+        if self.char_end - self.char_start != len(self.display_text):
+            raise ValueError("字符区间长度必须等于展示原文长度")
+
+        if self.display_text not in self.search_text:
+            raise ValueError("检索文本必须包含展示原文")
+
+        return self
+
+
 def _contains_markdown_table(body: str) -> bool:
     """判断正文是否含表头、分隔线与至少一行数据的 Markdown 表格。
 
@@ -376,6 +417,7 @@ __all__ = [
     "KnowledgeNode",
     "KnowledgeSection",
     "KnowledgeSource",
+    "RetrievalChunk",
     "load_knowledge_catalog",
     "load_knowledge_document",
 ]
