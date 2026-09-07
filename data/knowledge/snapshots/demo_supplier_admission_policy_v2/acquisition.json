@@ -1,0 +1,24 @@
+{
+  "acquisition_method": "frozen_from_confirmed_internal_policy",
+  "applicability": "VEN-001 的直接制度依据, 仅适用于供应商准入材料核验。",
+  "authority": "internal",
+  "canonical_url": null,
+  "content_type": "text/markdown; charset=utf-8",
+  "edition_key": "demo_supplier_admission_policy_v2",
+  "effective_from": "2026-01-01",
+  "effective_until": null,
+  "http_status": null,
+  "published_on": "2026-01-01",
+  "publisher": "VendorGuard 演示制度库",
+  "retrieved_at": null,
+  "role": "direct_policy",
+  "snapshot_path": "snapshots/demo_supplier_admission_policy_v2/original.md",
+  "snapshot_sha256": "20582feaf7c45d4dda28f8ed44da968dee7edd6ff97badc71ce2dcb950cf6d7b",
+  "source_key": "vendorguard_internal_admission_policy",
+  "source_origin": "synthetic",
+  "supersedes": [
+    "demo_supplier_admission_policy_v1"
+  ],
+  "title": "供应商准入管理办法(演示, 现行)",
+  "version": "2.0"
+}

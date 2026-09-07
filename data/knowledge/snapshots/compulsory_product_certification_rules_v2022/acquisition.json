@@ -1,0 +1,22 @@
+{
+  "acquisition_method": "copied_from_verified_research_snapshot",
+  "applicability": "仅在案件事实证明产品位于 CCC 目录时提供背景, 不产生通用材料要求。",
+  "authority": "department_rule",
+  "canonical_url": "https://isccc.gov.cn/xxgk1/zcfg_3/bmgz/202507/t20250725_8567.htm",
+  "content_type": "text/html",
+  "edition_key": "compulsory_product_certification_rules_v2022",
+  "effective_from": "2022-09-29",
+  "effective_until": null,
+  "http_status": 200,
+  "published_on": "2022-09-29",
+  "publisher": "国家市场监督管理总局",
+  "retrieved_at": "2026-09-06T13:28:12Z",
+  "role": "conditional_reference",
+  "snapshot_path": "snapshots/compulsory_product_certification_rules_v2022/original.html",
+  "snapshot_sha256": "4372cf2c97c26c6fde3c7769b714fca9cf0a976f40ba376f32a435bf8ce849d1",
+  "source_key": "state_administration_market_regulation",
+  "source_origin": "gov_document",
+  "supersedes": [],
+  "title": "强制性产品认证管理规定",
+  "version": "2022年修订文本"
+}

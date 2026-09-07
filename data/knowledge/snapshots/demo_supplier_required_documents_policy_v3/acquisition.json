@@ -1,0 +1,22 @@
+{
+  "acquisition_method": "frozen_from_confirmed_internal_policy",
+  "applicability": "VEN-002 的唯一直接制度依据, 表格行将作为材料要求的引用单位。",
+  "authority": "internal",
+  "canonical_url": null,
+  "content_type": "text/markdown; charset=utf-8",
+  "edition_key": "demo_supplier_required_documents_policy_v3",
+  "effective_from": "2026-01-01",
+  "effective_until": null,
+  "http_status": null,
+  "published_on": "2026-01-01",
+  "publisher": "VendorGuard 演示制度库",
+  "retrieved_at": null,
+  "role": "direct_policy",
+  "snapshot_path": "snapshots/demo_supplier_required_documents_policy_v3/original.md",
+  "snapshot_sha256": "3359db96c1aab7156b7098b7299259cb6fcf8ad676d441060ce7a81ee0703be6",
+  "source_key": "vendorguard_internal_required_documents_policy",
+  "source_origin": "synthetic",
+  "supersedes": [],
+  "title": "分品类必需准入材料清单(演示, 现行)",
+  "version": "3.0"
+}

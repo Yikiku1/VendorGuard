@@ -1,0 +1,22 @@
+{
+  "acquisition_method": "downloaded_from_canonical_url",
+  "applicability": "营业执照记载事项和效力的背景, 不构成企业供应商准入义务。",
+  "authority": "department_rule",
+  "canonical_url": "https://www.gov.cn/zhengce/zhengceku/2022-03/02/content_5676403.htm",
+  "content_type": "text/html",
+  "edition_key": "market_entity_registration_rules_v2022",
+  "effective_from": "2022-03-01",
+  "effective_until": null,
+  "http_status": 200,
+  "published_on": "2022-03-01",
+  "publisher": "国家市场监督管理总局",
+  "retrieved_at": "2026-09-07T10:28:54.537308Z",
+  "role": "background",
+  "snapshot_path": "snapshots/market_entity_registration_rules_v2022/original.html",
+  "snapshot_sha256": "8aed0fa5c368f47162063cf3a9209676f8c59174d65783c9aa4b5da06e2124c5",
+  "source_key": "state_administration_market_regulation",
+  "source_origin": "gov_document",
+  "supersedes": [],
+  "title": "市场主体登记管理条例实施细则",
+  "version": "国家市场监督管理总局令第52号"
+}

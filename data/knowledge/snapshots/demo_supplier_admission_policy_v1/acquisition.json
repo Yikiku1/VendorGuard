@@ -1,0 +1,22 @@
+{
+  "acquisition_method": "frozen_from_confirmed_internal_policy",
+  "applicability": "仅用于历史案件版本回放, 不得作为 2026-01-01 后准入依据。",
+  "authority": "internal",
+  "canonical_url": null,
+  "content_type": "text/markdown; charset=utf-8",
+  "edition_key": "demo_supplier_admission_policy_v1",
+  "effective_from": "2023-01-01",
+  "effective_until": "2025-12-31",
+  "http_status": null,
+  "published_on": "2023-01-01",
+  "publisher": "VendorGuard 演示制度库",
+  "retrieved_at": null,
+  "role": "version_negative",
+  "snapshot_path": "snapshots/demo_supplier_admission_policy_v1/original.md",
+  "snapshot_sha256": "8956f7427e19016df72fed0b902a324d1de97850e23d9d236a5ff24a7b778cb8",
+  "source_key": "vendorguard_internal_admission_policy",
+  "source_origin": "synthetic",
+  "supersedes": [],
+  "title": "供应商准入管理办法(演示, 已废止)",
+  "version": "1.0"
+}

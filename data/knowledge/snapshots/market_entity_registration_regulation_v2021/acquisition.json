@@ -1,0 +1,22 @@
+{
+  "acquisition_method": "downloaded_from_canonical_url",
+  "applicability": "登记事项和营业执照效力的背景, 不构成企业供应商准入义务。",
+  "authority": "administrative_regulation",
+  "canonical_url": "https://www.mee.gov.cn/zcwj/gwywj/202108/t20210824_860263.shtml",
+  "content_type": "text/html",
+  "edition_key": "market_entity_registration_regulation_v2021",
+  "effective_from": "2022-03-01",
+  "effective_until": null,
+  "http_status": 200,
+  "published_on": "2021-07-27",
+  "publisher": "国务院",
+  "retrieved_at": "2026-09-07T10:28:54.307049Z",
+  "role": "background",
+  "snapshot_path": "snapshots/market_entity_registration_regulation_v2021/original.html",
+  "snapshot_sha256": "9be4519bf617f56d30cea5339d0afe0c08ac4914e66d8bf9f7813e053421a37d",
+  "source_key": "state_council_regulations",
+  "source_origin": "gov_document",
+  "supersedes": [],
+  "title": "中华人民共和国市场主体登记管理条例",
+  "version": "国务院令第746号"
+}

@@ -1,0 +1,22 @@
+{
+  "acquisition_method": "copied_from_verified_research_snapshot",
+  "applicability": "质量认证自愿原则的对抗负例, 不得反向推导内部材料清单。",
+  "authority": "law",
+  "canonical_url": "https://www.cnipa.gov.cn/art/2019/7/31/art_104_67810.html",
+  "content_type": "text/html; charset=UTF-8",
+  "edition_key": "product_quality_law_v2018",
+  "effective_from": "2018-12-29",
+  "effective_until": null,
+  "http_status": 200,
+  "published_on": "2018-12-29",
+  "publisher": "全国人民代表大会常务委员会",
+  "retrieved_at": "2026-09-06T13:28:12Z",
+  "role": "version_negative",
+  "snapshot_path": "snapshots/product_quality_law_v2018/original.html",
+  "snapshot_sha256": "035972832a37c4d536d493c6710994acc2d20b787c6f9865e990d9563f62ab4c",
+  "source_key": "national_peoples_congress_laws",
+  "source_origin": "gov_document",
+  "supersedes": [],
+  "title": "中华人民共和国产品质量法",
+  "version": "2018年第三次修正后文本"
+}

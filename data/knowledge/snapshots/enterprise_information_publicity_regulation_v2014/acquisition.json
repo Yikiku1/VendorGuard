@@ -1,0 +1,22 @@
+{
+  "acquisition_method": "downloaded_from_canonical_url",
+  "applicability": "只用于历史版本过滤和引用定位测试, 不构成企业准入制度。",
+  "authority": "administrative_regulation",
+  "canonical_url": "https://xzfg.moj.gov.cn/front/law/detail?LawID=415",
+  "content_type": "text/html",
+  "edition_key": "enterprise_information_publicity_regulation_v2014",
+  "effective_from": "2014-10-01",
+  "effective_until": "2024-04-30",
+  "http_status": 200,
+  "published_on": "2014-08-07",
+  "publisher": "国务院",
+  "retrieved_at": "2026-09-07T10:28:54.808169Z",
+  "role": "version_negative",
+  "snapshot_path": "snapshots/enterprise_information_publicity_regulation_v2014/original.html",
+  "snapshot_sha256": "9dc3912d8b59118ccef9b1823c120dc8fef84abd7d00d5a58003f73117284504",
+  "source_key": "state_council_regulations",
+  "source_origin": "gov_document",
+  "supersedes": [],
+  "title": "企业信息公示暂行条例",
+  "version": "国务院令第654号"
+}
