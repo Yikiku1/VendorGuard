@@ -11,6 +11,7 @@ from vendorguard.alembic_filters import load_extension_owned_tables, make_includ
 from vendorguard.audit import AuditEvent  # noqa: F401
 from vendorguard.config import load_settings
 from vendorguard.database import Base, build_database_url
+from vendorguard.evidence import models  # noqa: F401
 from vendorguard.security import User  # noqa: F401
 from vendorguard.suppliers import Supplier  # noqa: F401
 
