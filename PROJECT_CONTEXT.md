@@ -2,9 +2,9 @@
 
 VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处理供应商准入和采购申请例外，不替代采购、质量或法务人员的最终决定。
 
-> 最后整理：2026-09-05
-> 当前阶段：Day 1 至 Day 4 已完成；Day 5 已完成结构化模拟事实层、按案件状态触发的规则评估编排与评估 HTTP 端点，并以两个 YAML 案例通过契约验收。Day 4 完成判定第 2 条“正常准入进入待审批状态”按方案 B 只兑现到 `analyzing`：案件能走到 `analyzing`（补件案命中 `VEN-002` 落 `pending_documents` 并可重跑），`pending_approval` 依赖 Day 6 证据审校，本期不推进
-> 当前结论：最小案件模型、追加式审计存储、创建供应商、创建准入案件、材料登记、案件详情、最小状态迁移、采购经理审批决定端点、版本化规则 Schema 与 `VEN-001`/`VEN-002` 执行、结构化事实加载与来源定位校验、规则评估编排函数 (`evaluate_admission_case`) 与评估端点 (`POST /api/admission/cases/{id}/evaluation`) 均已通过自动化测试验证
+> 最后整理：2026-09-08
+> 当前阶段：Day 1 至 Day 5 已完成。Day 6 已完成一期 RAG 语料与固定评测集准备，但节点解析、入库、检索、指标与证据接口尚未实现，因此 Day 6 不得标记完成。Day 4 完成判定第 2 条“正常准入进入待审批状态”仍只兑现到 `analyzing`：案件能走到 `analyzing`，补件案命中 `VEN-002` 落 `pending_documents` 并可重跑；`pending_approval` 依赖尚未实现的证据审校。
+> 当前结论：最小案件模型、追加式审计存储、创建供应商、创建准入案件、材料登记、案件详情、最小状态迁移、采购经理审批决定端点、版本化规则 Schema 与 `VEN-001`/`VEN-002` 执行、结构化事实加载与来源定位校验、规则评估编排函数 (`evaluate_admission_case`) 与评估端点 (`POST /api/admission/cases/{id}/evaluation`) 均已通过自动化测试验证；RAG 已冻结 10 份版本化快照、33,244 字符归一化正文和 15 题评测集，但尚不能提供检索结果或证据结论。
 
 ## 先读什么
 
@@ -71,14 +71,16 @@ VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处�
 - 2026-09-05 已完成审计层扩展与迁移：`AuditEventType` 新增 `rules_evaluated`、`rule_hit_recorded`，迁移 `0a22cbb97473` 仅替换 `event_type` CHECK 约束（列宽不变、无需 `alter_column`），`alembic check` 无新增操作
 - 2026-09-05 已完成评估 HTTP 端点 `POST /api/admission/cases/{id}/evaluation`：仅采购专员可发起，请求体复用 `StructuredFacts`（缺来源定位经 pydantic 返回 422），非可评估状态返回 409、案件不存在走统一 404 handler、审计失败事务回滚返回 500；7 条端点集成测试通过
 - 2026-09-05 已完成 Day 5 两条契约流程验收（服务层）：正常案由 `normal_admission.yaml` 加载事实评估后停在 `analyzing` 无命中；补件案首轮命中 `VEN-002` 进 `pending_documents`，重跑回 `analyzing` 后首轮命中仍在追加式审计时间线保留
+- 2026-09-07 已冻结一期 RAG 正式语料：`data/knowledge/manifests/corpus_v1.json` 固定 10 份版本化快照，`data/knowledge/normalized/` 固定 33,244 字符正文；每份原始快照和归一化正文的 SHA-256 均可复算。外部法规只作为背景、条件性参考或对抗负例，`VEN-001` 与 `VEN-002` 的直接依据仍只能来自内部版本化制度。
+- 2026-09-07 已完成固定检索评测集：`data/evals/rag_phase1.json` 包含 15 题，其中 6 个 `answerable`、4 个 `no_answer`、5 个 `adversarial_negative`；`evidence/evaluation.py` 强制版本化金标准、禁止引用、适用条件和题目唯一性，相关单元测试通过。
 
 尚未开始：
 
 - 根目录初始 Hello World `main.py` 已删除，后端统一从 `vendorguard.app:create_app` 启动；`README.md` 仍为空
 - 实际文件存储尚未实现；案件详情已返回材料元数据清单
-- 分析快照、前端、Agent、RAG、真实文件解析和完整工作流/E2E 自动化测试尚未实现；结构化案例文件的 `expected_state_transitions`/`expected_audit_event_types` 全链路仍为 `defined_only`，Day 5 只兑现到 `analyzing` 与 `pending_documents` 的评估子集；案件推进到 `pending_approval` 依赖 Day 6 证据审校，Day 4 完成判定第 2 条据此在 Day 5 只部分兑现
+- 分析快照、前端、Agent、真实文件解析和完整工作流/E2E 自动化测试尚未实现。RAG 的节点解析、切块、持久化、入库、结构化/BM25/向量召回、融合、离线指标和 `evidence` 接口尚未实现；当前只有冻结语料和固定评测集。结构化案例文件的 `expected_state_transitions`/`expected_audit_event_types` 全链路仍为 `defined_only`，Day 5 只兑现到 `analyzing` 与 `pending_documents` 的评估子集；案件推进到 `pending_approval` 依赖 Day 6 证据审校，Day 4 完成判定第 2 条据此在 Day 5 只部分兑现
 
-当前测试基线为 117 项通过和 1 条已知的 `StarletteDeprecationWarning`；Ruff lint、Ruff format、mypy、`git diff --check` 与 `alembic check` 均通过。数据库位于 `0a22cbb97473 (head)`。该警告来自 FastAPI `TestClient` 的第三方兼容提示，不影响当前验收。另有一条与代码无关的本地 `PytestCacheWarning`（`.pytest_cache` 目录写权限），已被 gitignore，不影响验收。
+2026-09-08 的 RAG 相关单元测试为 44 项通过；Ruff、格式检查和 mypy 对 `src`、`tests` 通过。全量 pytest 在本机因 PostgreSQL 连接被拒绝而无法完成集成测试，首个失败发生在集成 fixture 创建数据库记录之前；该环境问题不改变已通过的 RAG 单元测试结论。另有一条与代码无关的 `PytestCacheWarning`（`.pytest_cache` 目录写权限），已被 gitignore，不影响验收。
 
 不要因为目录或文档已经存在，就把对应功能视为已完成。
 
@@ -274,13 +276,13 @@ VendorGuard/
 
 2026-09-05 已完成 Day 5：结构化模拟事实层（`StructuredFacts` + `load_demo_case_facts` + 确定性计算）、评估编排 `evaluate_admission_case`（按 `enabled_rule_ids` 评估、驱动 `analyzing`/`pending_documents`、有序审计）、评估端点 `POST /api/admission/cases/{id}/evaluation` 与审计扩展迁移 `0a22cbb97473` 全部通过自动化测试（累计 117 项）。按方案 B，案件本期最远走到 `analyzing`（补件案经 `pending_documents` 可重跑并保留历史命中），`pending_approval` 依赖 Day 6 证据审校未推进，Day 4 完成判定第 2 条据此只部分兑现。
 
-Day 6 起点：建 `data/knowledge/` 十篇制度/案例（公开来源取带出处与抓取日期的文本快照，模拟来源仅用于企业内部制度这类无公开版本的语料）、最小引用元数据（版本、生效期、页码或章节、来源类型与出处）、解析产物清洗与重复段落去重、PostgreSQL 全文检索 + pgvector + 简单 RRF 融合、默认关闭的外部 rerank 接口、`evidence` 检索接口、15 个固定问题评测集与稳定“证据不足”拒答；指标脚本输出 hit@4、MRR、recall@20、无答案精度和引用可定位率，并须通过两项有效性自检（期望引用能在原文命中、打乱目标章节后命中率下降）。不解析真实 PDF、XLSX、CSV 文件。在证据环节落地后，再评估把准入案件从 `analyzing` 经 `evidence_reviewing` 推进到 `pending_approval`，以正式补齐 Day 4 完成判定第 2 条。
+2026-09-08 Day 6 当前状态：10 份正式快照、33,244 字符归一化正文、来源与正文哈希清单，以及 15 个固定问题评测集已完成。此前实现后撤回的节点解析、持久化、入库和检索代码不视为现有能力。下一步先将归一化正文解析为 `KnowledgeNode` 与 `RetrievalChunk`，再实现入库、候选资格硬过滤、结构化/BM25/向量召回和离线指标。仍不解析真实 PDF、XLSX、CSV 文件；在证据环节落地后，才评估把准入案件从 `analyzing` 经 `evidence_reviewing` 推进到 `pending_approval`，以正式补齐 Day 4 完成判定第 2 条。
 
 ## 开发顺序
 
 1. 完成 `VEN-001`、`VEN-002` 规则执行 ✅，用结构化模拟事实经评估编排跑通正常准入（到 `analyzing`）与规则补件（`VEN-002`→`pending_documents`、可重跑保留历史）✅；推进到 `pending_approval` 待 Day 6 证据审校
 2. 实现采购经理通过/拒绝 ✅、提交人隔离（当前角色模型天然保证，见 `record_admission_decision` docstring）✅、JSON 分析快照（未开始）、追加式审计 ✅
-3. 用 10 篇资料实现全文检索、pgvector、简单融合、引用和无证据拒答
+3. 基于已冻结的 10 份语料和 15 题评测集，实现节点解析、全文检索、pgvector、简单融合、引用和无证据拒答
 4. 用 LangGraph 串联两个受控 Agent，验证一个失败节点恢复场景
 5. 完成登录、案件队列、统一案件详情三个前端入口和一条 Playwright 主流程
 6. 完成简单 CI、README、架构图和本地演示说明
