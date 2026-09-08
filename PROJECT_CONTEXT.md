@@ -1,292 +1,51 @@
-# 如何继续开发 VendorGuard
-
-VendorGuard 是一个教学用途的企业 AI 应用。它帮助制造企业处理供应商准入和采购申请例外，不替代采购、质量或法务人员的最终决定。
-
-> 最后整理：2026-09-08
-> 当前阶段：Day 1 至 Day 5 已完成。Day 6 已完成一期 RAG 语料与固定评测集准备，但节点解析、入库、检索、指标与证据接口尚未实现，因此 Day 6 不得标记完成。Day 4 完成判定第 2 条“正常准入进入待审批状态”仍只兑现到 `analyzing`：案件能走到 `analyzing`，补件案命中 `VEN-002` 落 `pending_documents` 并可重跑；`pending_approval` 依赖尚未实现的证据审校。
-> 当前结论：最小案件模型、追加式审计存储、创建供应商、创建准入案件、材料登记、案件详情、最小状态迁移、采购经理审批决定端点、版本化规则 Schema 与 `VEN-001`/`VEN-002` 执行、结构化事实加载与来源定位校验、规则评估编排函数 (`evaluate_admission_case`) 与评估端点 (`POST /api/admission/cases/{id}/evaluation`) 均已通过自动化测试验证；RAG 已冻结 10 份版本化快照、33,244 字符归一化正文和 15 题评测集，但尚不能提供检索结果或证据结论。
-
-## 先读什么
-
-开始任何产品设计、编码或测试前，先读以下文件：
-
-1. `PROJECT_CONTEXT.md`：当前项目事实、边界、进度和接手方式
-2. `project_docs/VendorGuard-状态数据字典.md`：五类状态、迁移条件和非法迁移边界
-3. `project_docs/VendorGuard-PRD.md`：MVP 范围、系统架构、技术栈和验收标准
-4. `project_docs/VendorGuard-前期调研与需求分析.md`：业务依据、术语和规则来源
-5. `project_docs/VendorGuard-10天计划.md`：每日任务、交付物和完成判定
-
-当需求、调研或当前代码不一致时，以用户最新确认的要求为准；然后更新对应文档，避免形成两套事实。
-
-## 当前进度
-
-已经完成：
-
-- 正式名称、十天 MVP 范围、长期愿景和产品边界已经统一
-- PRD、前期调研与需求分析、10 天冲刺计划已经整理
-- 精简的模块化单体目录已经建立
-- 五类状态的数据字典、迁移条件和最小测试清单已经固化
-- 正常准入、补件后复核、未准入供应商采购例外三个 YAML 案例已经定义并通过格式与内部一致性检查；采购例外案例现作为二期设计保留
-- `project_docs/VendorGuard-规则测试表.md` 的四项建模选择已经确认，七条规则共定义 43 个唯一测试用例
-- `policies/rules/v1.0.0.yaml` 已建立并通过 YAML 结构、白名单运算符/动作和三案例合同检查
-- `pyproject.toml` 已配置 `src` 包构建、最小运行/开发依赖、Ruff、mypy 和 pytest；`uv lock`、`uv sync`、Ruff 与 mypy 已验证通过
-- `src/vendorguard/config.py` 已实现安全默认配置和 `VENDORGUARD_` 环境变量前缀；`.env.example` 已建立
-- `src/vendorguard/app.py` 已实现 FastAPI 应用工厂、`/health`、统一 404/500 JSON 错误响应以及 `X-Request-ID`
-- 后端已通过 Uvicorn `--factory` 方式实际启动，PowerShell 访问 `/health` 返回 `status = ok`
-- `src/vendorguard/logging.py` 已建立 `ContextVar` 请求上下文、`JsonFormatter` 和幂等日志器配置函数；正常与异常 HTTP 请求均写入带相同 `request_id` 的 JSON 日志
-- Day 1 共 13 个自动化测试通过；Ruff lint、Ruff format 和 mypy 对 `src`、`tests` 全部通过
-- PostgreSQL + pgvector 容器已在 `127.0.0.1:5433` 健康运行，数据目录使用 D 盘配置
-- SQLAlchemy 异步 Engine、请求级 Session、事务上下文和应用生命周期已经建立；应用关闭时会释放连接池
-- Alembic 首个迁移已经完成升级、回退和再次升级验证；模型与迁移使用同名显式 `user_role` 约束，`alembic check` 无新增操作
-- 四个角色代码已经固化；Argon2 密码哈希、JWT 签发/解析及过期、伪造、缺少密钥等边界测试已经通过
-- `demo.specialist` 与 `demo.manager` 使用环境密码完成真实幂等种子验证，首次创建 2 个账号，再次执行创建 0 个账号
-- 用户名、密码和启用状态的认证核心已经实现并覆盖正确密码、错误密码和停用账号
-- `/auth/login`、Bearer Token 认证依赖和 `/auth/me` 已实现，覆盖登录成功、错误凭据、缺失、伪造、过期 Token 和数据库用户确认
-- `Supplier`、`AdmissionCase`、`Document` 和 `AuditEvent` 最小模型及四个连续 Alembic 迁移已经实现
-- 材料元数据已保存类型、大小和 SHA-256；数据库通过 `(admission_case_id, sha256)` 唯一约束拒绝同案件重复材料
-- `append_audit_event()` 和 `list_audit_events()` 已实现，审计事件使用稳定递增 ID 返回时间线
-- PostgreSQL 触发器已验证会阻止审计事件 `UPDATE` 和 `DELETE`，业务写入函数只 `flush()`，可与后续业务变化共用事务
-- `POST /api/admission/suppliers` 已实现，仅采购专员可以创建供应商，统一社会信用代码唯一性由数据库约束保证
-- `admission/routes.py` 使用 Pydantic v2 `ConfigDict` 和标准权限检查模式；可复用的 `get_current_user` 位于 `dependencies.py`
-- 创建供应商业务函数位于 `suppliers.py`，使用 `flush()` 而非 `commit()`，事务边界由 HTTP 层控制
-- 供应商接口测试会清理本轮创建的模拟记录，不再持续污染本地数据库
-- `POST /api/admission/cases` 已实现，仅采购专员可以基于已有供应商创建准入案件；采购经理会被拒绝，不存在的供应商返回统一 404
-- 新建案件绑定当前采购专员和已有供应商，默认状态为 `draft`，并在同一事务追加 `admission_case_created` 审计事件
-- 案件接口集成测试验证了返回字段、审计主体和操作者、角色隔离、供应商存在性以及测试事务回滚
-- `POST /api/admission/cases/{case_id}/documents` 已实现，仅采购专员可以登记材料元数据；采购经理返回 403，不存在的案件返回统一 404
-- 材料元数据登记会保存材料类型、文件名、媒体类型、大小和规范化 SHA-256，并在同一事务追加 `documents_registered` 审计事件
-- 同一案件重复 SHA-256 返回 409；材料登记集成测试覆盖成功、角色隔离、案件存在性、重复约束和测试事务回滚
-- `POST /api/admission/cases/{case_id}/transition` 已实现，仅采购专员可以执行当前支持的案件状态迁移；当前允许 `draft -> pending_documents`
-- 合法状态迁移会在同一事务追加 `admission_case_status_changed` 审计事件，非法迁移返回 409 且不修改状态、不追加成功审计，采购经理返回 403
-- Day 4 首个小功能已完成：`vendorguard.policy.schema.load_policy()` 可按 UTF-8 加载并校验版本化 YAML 规则 Schema，拒绝未知字段、未知运算符/动作、重复规则 ID 和启用/延期清单覆盖不一致；现有 `policies/rules/v1.0.0.yaml` 已通过结构化模型测试
-- `VEN-001` 规则执行器已通过 3 项聚焦测试：营业执照状态正常不命中、过期时按字段值路由到补件结果、缺少输入时使用 YAML 的补件结果
-- 2026-09-05 已完成 `policies/rules/v1.0.0.yaml` 启用清单对齐：`enabled_rule_ids` 收敛为 `VEN-001`、`VEN-002`，其余五条（`VEN-003` 至 `VEN-006`、`PR-001`）全部放入 `deferred_rule_ids`；`tests/unit/test_policy_schema.py` 的断言已同步；数据库迁移未涉及
-- 2026-09-05 已完成 `VEN-002` 规则执行：`equals` 运算符通过 `_condition_matches` 辅助函数落地，布尔比较使用 `is` 防 `0 == False` 与 `"false" == False` 跨类型误命中；缺输入走 YAML 的 `create_manual_review` 与 `VEN-001` 走 `request_documents` 形成关键差异；6 条边界测试覆盖主流程、作用域外、缺输入和两种类型陷阱
-- 2026-09-05 已完成审计层扩展（Round 1a）：`AuditSubjectType` 新增 `supplier`，`AuditEventType` 新增 `admission_case_decision_recorded` 与 `supplier_eligibility_changed`；Alembic 迁移 `1fe47cf7cb3e` 将 `event_type` 列扩至 `VARCHAR(31)` 并刷新两条 CHECK 约束，`alter_column` 使用 `sa.Enum` 而非 `sa.String` 保证 `alembic check` 无漂移
-- 2026-09-05 已完成采购经理审批接口（Round 1b）：`AdmissionDecision` 枚举与状态转换表补齐 `pending_approval → {approved, rejected, pending_documents}`；`record_admission_decision` 单次事务内迁移案件状态，approved/rejected 同步更新供应商资格，按序追加 `decision_recorded → status_changed → supplier_eligibility_changed` 3 条审计事件（第三类事件仅在 approved/rejected 分支产生）
-- 2026-09-05 已完成 `POST /api/admission/cases/{id}/decision` HTTP 端点，仅采购经理可访问（其他角色返回 403），空 reason 通过 Pydantic `min_length=1` 返回 422，非法状态迁移返回 409，不存在的案件走全局 404 handler；8 条集成测试覆盖 approved/rejected/supplement_requested 三条主流程与角色/状态/参数/回滚四条边界路径，其中审计失败回滚测试用 `monkeypatch` 把 `append_audit_event` 替换为抛错，断言业务状态不落地
-
-- 2026-09-05 已完成 Day 5 结构化事实层（`policy/facts.py`）：`StructuredFacts` 以白名单 + `StrictBool` 约束本期启用规则消费的事实，每个已给出事实必须带 `document_id@定位符` 格式的来源定位，缺来源、未知字段、类型越界一律明确失败不猜测；`load_demo_case_facts()` 兼容正常案顶层与补件案阶段子段两种形状；`certificate_remaining_days()` 按“到期日当天仍有效”边界做确定性计算；10 条单元测试通过
-- 2026-09-05 已完成 Day 5 评估编排（`admission.evaluate_admission_case()`）：案件须处于 `draft`/`pending_documents` 才能评估，先移到 `analyzing`，任一命中动作为 `request_documents` 再移到 `pending_documents`，否则停在 `analyzing`；单次事务内按序追加 `admission_case_status_changed`→`rules_evaluated`→逐条 `rule_hit_recorded`→（如需）`admission_case_status_changed`；只评估 `enabled_rule_ids`（`VEN-001`/`VEN-002`），不改供应商资格、不推进 `pending_approval`（方案 B）；`analyzing` 与手动 `/transition` 分道，共享迁移表未改动
-- 2026-09-05 已完成审计层扩展与迁移：`AuditEventType` 新增 `rules_evaluated`、`rule_hit_recorded`，迁移 `0a22cbb97473` 仅替换 `event_type` CHECK 约束（列宽不变、无需 `alter_column`），`alembic check` 无新增操作
-- 2026-09-05 已完成评估 HTTP 端点 `POST /api/admission/cases/{id}/evaluation`：仅采购专员可发起，请求体复用 `StructuredFacts`（缺来源定位经 pydantic 返回 422），非可评估状态返回 409、案件不存在走统一 404 handler、审计失败事务回滚返回 500；7 条端点集成测试通过
-- 2026-09-05 已完成 Day 5 两条契约流程验收（服务层）：正常案由 `normal_admission.yaml` 加载事实评估后停在 `analyzing` 无命中；补件案首轮命中 `VEN-002` 进 `pending_documents`，重跑回 `analyzing` 后首轮命中仍在追加式审计时间线保留
-- 2026-09-07 已冻结一期 RAG 正式语料：`data/knowledge/manifests/corpus_v1.json` 固定 10 份版本化快照，`data/knowledge/normalized/` 固定 33,244 字符正文；每份原始快照和归一化正文的 SHA-256 均可复算。外部法规只作为背景、条件性参考或对抗负例，`VEN-001` 与 `VEN-002` 的直接依据仍只能来自内部版本化制度。
-- 2026-09-07 已完成固定检索评测集：`data/evals/rag_phase1.json` 包含 15 题，其中 6 个 `answerable`、4 个 `no_answer`、5 个 `adversarial_negative`；`evidence/evaluation.py` 强制版本化金标准、禁止引用、适用条件和题目唯一性，相关单元测试通过。
-
-尚未开始：
-
-- 根目录初始 Hello World `main.py` 已删除，后端统一从 `vendorguard.app:create_app` 启动；`README.md` 仍为空
-- 实际文件存储尚未实现；案件详情已返回材料元数据清单
-- 分析快照、前端、Agent、真实文件解析和完整工作流/E2E 自动化测试尚未实现。RAG 的节点解析、切块、持久化、入库、结构化/BM25/向量召回、融合、离线指标和 `evidence` 接口尚未实现；当前只有冻结语料和固定评测集。结构化案例文件的 `expected_state_transitions`/`expected_audit_event_types` 全链路仍为 `defined_only`，Day 5 只兑现到 `analyzing` 与 `pending_documents` 的评估子集；案件推进到 `pending_approval` 依赖 Day 6 证据审校，Day 4 完成判定第 2 条据此在 Day 5 只部分兑现
-
-2026-09-08 的 RAG 相关单元测试为 44 项通过；Ruff、格式检查和 mypy 对 `src`、`tests` 通过。全量 pytest 在本机因 PostgreSQL 连接被拒绝而无法完成集成测试，首个失败发生在集成 fixture 创建数据库记录之前；该环境问题不改变已通过的 RAG 单元测试结论。另有一条与代码无关的 `PytestCacheWarning`（`.pytest_cache` 目录写权限），已被 gitignore，不影响验收。
-
-不要因为目录或文档已经存在，就把对应功能视为已完成。
-
-## Day 1 完成验收
-
-2026-08-28 已基于同一份代码完成以下验证：
-
-```powershell
-uv run pytest
-uv run ruff check src tests
-uv run ruff format --check src tests
-uv run mypy src tests
-```
-
-对应结果为 13 个测试通过、Ruff lint 通过、15 个文件格式通过、15 个源文件类型检查通过。新终端使用以下命令启动成功：
-
-```powershell
-uv run uvicorn vendorguard.app:create_app --factory --host 127.0.0.1 --port 8000
-```
+# VendorGuard 当前上下文
 
-`Invoke-WebRequest http://127.0.0.1:8000/health` 返回 `200`、`{"status":"ok"}` 和非空 `X-Request-ID`；服务端 JSON 日志中的 `request_id` 与响应头一致。并发 HTTP 测试证明两个请求的上下文不串线，异常测试证明内部异常原文不会进入响应或 VendorGuard JSON 日志。
+> 更新：2026-09-08。用户已要求按 AI Agent / AI 应用开发求职定位简化项目。
+> 本次调整了定位、范围和计划；下述 Agent 产品能力仍待实现。
 
-pytest 仍会报告 FastAPI `TestClient` 与 HTTP 客户端相关的 `StarletteDeprecationWarning`。它不影响当前验收，不应根据警告盲装依赖；进入后续依赖维护时再核对官方兼容关系和锁文件。
+## 当前定位与入口
 
-## Claude Code 接手点（2026-09-01 更新）
+VendorGuard 是供应商材料审查 Agent：用户提交材料，Agent 调用读取、校验和制度检索工具，缺信息时追问，最终输出带来源的初审报告，供用户确认。
 
-新会话开始后，先完整阅读本文件和“先读什么”列出的四份项目文档，并继续遵循“新对话的协作方式”。当前可靠事实如下：
+- 产品范围与技术取舍：[PRD](project_docs/VendorGuard-PRD.md)。
+- 当前工作与完成标准：[Agent 开发计划](project_docs/VendorGuard-Agent开发计划.md)。
+- 开发协作规则：[AGENTS.md](AGENTS.md)。
+- 修改已有案件状态、规则或数据库时，按需查阅状态数据字典、规则 YAML 和现有迁移；不再要求每次开发完整阅读领域调研。
 
-- Day 1 已完成并在 10 天计划中勾选；保留现有配置、`/health`、错误响应和日志模块。
-- Day 2 已完成数据库容器、请求级 Session、应用生命周期、Alembic 基础、角色约束、Argon2、JWT、演示账号种子、认证核心和 HTTP 认证链路。
-- 两个演示账号已经真实写入本地 PostgreSQL；种子重复执行返回 0，证明当前数据库中的幂等性。
-- Day 3 已完成模型层、创建供应商和创建准入案件 HTTP 接口：`Supplier`、`AdmissionCase`、`Document`、`AuditEvent`、四个迁移、同案件材料 SHA-256 去重、审计追加/查询、数据库级禁止更新/删除、`POST /api/admission/suppliers` 和 `POST /api/admission/cases`；只有采购专员可以创建供应商和案件。
-- 创建案件会校验供应商存在性，绑定当前提交人并使用 `draft` 状态，在同一事务追加 `admission_case_created`；采购经理创建案件返回 403，不存在的供应商返回统一 404。
-- Day 3 已完成材料元数据登记、`documents_registered` 审计串联、案件详情查询和最小状态迁移；详情返回案件、供应商、材料元数据及审计时间线，状态迁移覆盖合法、非法和角色隔离路径。
-- 当前数据库迁移为 `e3af14b303b1 (head)`。联合验收为 pytest 77 passed、Ruff lint/format 通过、mypy 无问题、`git diff --check` 通过、`alembic check` 无新增操作。
-- 唯一已知的非阻塞提示是 `StarletteDeprecationWarning`；不要仅根据警告安装 `httpx2` 或修改锁文件。
+旧十天计划已停止执行。旧 Day 4 / Day 6 完成条件不再阻塞 Agent 开发，未完成事项也不因此变成已完成。旧文档保存在 [调整前快照](project_docs/archive/2026-09-08-before-agent-focus/PROJECT_CONTEXT.md)，仅供历史查询。
 
-（本节为 2026-09-01 的历史接手快照，保留原描述便于追溯。截至 2026-09-05，Day 4 的规则引擎（`VEN-001`、`VEN-002`）与采购经理审批接口已经全部完成；pytest 累计 91 passed、迁移 head 已到 `1fe47cf7cb3e`。不提前实现前端、RAG 或复杂审批流程。最新状态见“当前进度”和“下一步”章节。）
+## 当前代码事实
 
-## 产品定位
+以下来自本轮文件核对，不代表本轮重新通过运行验证。
 
-**正式名称**：VendorGuard：供应商准入与采购例外协同平台
+| 能力 | 当前证据与边界 |
+| --- | --- |
+| 后端与认证 | FastAPI、数据库会话、JWT、配置和日志实现已存在 |
+| 供应商与案件 | 创建、材料元数据登记、查询、规则评估及人工决定接口已存在；并非完整页面闭环 |
+| 确定性规则 | `policy/schema.py`、`policy/evaluator.py`、`policy/facts.py` 已存在；启用规则仍为 `VEN-001`、`VEN-002` |
+| 知识资料与评测 | 已有冻结语料、归一化正文和 `data/evals/rag_phase1.json` |
+| 结构节点解析 | `evidence/node_parser.py` 与对应测试已存在；旧交接中“尚未实现”的描述已过时 |
+| RAG 持久化 | `evidence/models.py`、迁移 `b0604f36e9a4` 已存在，包含四层实体和版本关联表；本轮开始时两者尚未提交，`alembic/env.py` 也有已有改动 |
+| Agent 产品链路 | 尚无模型接入、可运行工具循环、真实材料解析、完整检索接口或前端演示 |
 
-**长期愿景**：供应商全生命周期风险协同平台；一期交付不使用该愿景名称代替当前产品范围。
+当前案件评估中的正常路径仍停在 `analyzing`，补件路径可到 `pending_documents`；已有人工决定接口不等于端到端审批已跑通。Agent 初审报告不依赖推进这些业务状态，也不能把报告确认写成供应商准入批准。
 
-**十天 MVP 范围**：供应商准入风险评审。采购申请例外保留为二期领域设计，不进入本期代码和验收。
+## 已有成果如何处理
 
-系统将供应商材料元数据、结构化模拟事实、规则命中、制度/案例引用、人工决定和审计事件关联为可恢复的准入案件流程。长期产品仍区分供应商准入和采购申请例外；十天 MVP 只实现前者，不能把采购例外描述为已交付能力。
+已完成占位清理：删除两个空模块、两个旧策略目录占位和五个多余 `.gitkeep`，移除 AGENTS.md 的旧 Pi 安装提示。具体路径见 M1 实施方案的清理记录。实际业务逻辑、测试、依赖、配置和数据库未改变，也没有撤销已有迁移或用户未提交改动。当前数据库实际迁移版本和服务健康状态未重查，不能使用历史成功记录代替现场验证。
 
-```text
-供应商准入：申请 -> 材料核验 -> 事实提取 -> 规则门禁 -> 证据审校 -> 人工审批 -> AVL/归档
-二期采购例外：PR -> AVL 校验 -> 例外申请 -> 规则与证据 -> 人工审批 -> 单次放行/拒绝/到期
-```
+后续优先复用规则纯函数、事实 Schema、制度正文及节点定位。RAG 持久化和案件审批保留在原处，暂停扩展。将来决定删除时，需要先确认代码引用与实际数据库状态，再单独处理。
 
-## 十天 MVP 边界
+2026-09-08 后续范围确认：RAG 仍是核心能力，按 [PRD 的 RAG 核心范围](project_docs/VendorGuard-PRD.md#rag-核心范围) 精简为两份现行制度、扁平片段、本地向量检索、引用校验与 8 题评测。复用内部制度解析器；全法规解析、多表入库、版本血缘和多路召回暂停。RAG 实现未删除，M1 仍是当前下一步。
 
-必须实现：
+旧文档记录的测试结果属于历史验证。占位清理按删除路径、代码引用和导入检查验证，不将其视为业务功能或数据库重新验收。
 
-- 供应商申请、材料元数据登记、规则触发补件和一个可验证的失败节点恢复场景
-- 固定结构化事实样例及其模拟页码、单元格或行号来源；不实现真实 PDF、XLSX、CSV 解析
-- `VEN-001`、`VEN-002` 两条启用规则、采购经理通过/拒绝、提交人与审批人隔离和追加式审计
-- 基于 10 篇资料的 PostgreSQL 全文检索、pgvector、简单融合、引用和无证据拒答
-- 两个受控 Agent、一个准入 LangGraph、正常与补件两个简化案例、三个前端入口和关键自动化测试
+## 当前下一步
 
-不进入一期：
+当前仅进入新计划 M1：一个命令行 Agent 根据结构化示例调用材料校验工具，并根据工具结果回答或追问。
 
-- 真实工商、征信、ERP、财务、签约或支付系统
-- 采购申请、采购例外案件、`PR-001` 执行与例外审批
-- 真实 PDF、XLSX、CSV 文件解析和通用文件存储平台
-- 自动签约、自动下 PO、自动付款或自动批准供应商
-- 收货、发票匹配、付款结账、库存 MRP 和复杂预测模型
-- OCR、自建或部署重排模型、复杂评测大屏和真实消息队列
-- 通用文件模板、权限过滤、知识库增量索引；检索指标只以离线脚本输出，不构成在线质量承诺
-- 质量经理业务流程、关键物料双人审批、限时豁免和管理员页面
-- 使用或上传真实供应商、合同、报价、联系人数据
+2026-09-08 已完成 [M1 实施方案](project_docs/VendorGuard-M1实施方案.md) 与占位文件清理，尚未实现 Agent。方案准备时，现有规则 Schema、事实和执行器的 22 项单元测试通过；正常案例纯函数探针返回两条 `not_hit`，未加载数据库模块。旧补件 YAML 的顶层完整性字段不会被当前加载器读取，M1 使用明确构造的事实变体，不直接套用旧补件案例。
 
-## 角色与权限
+先确认实际模型接口支持 tool calling，再通过对应官方 SDK 接入。复用 `evaluate_rule()` 等纯函数；不要让模型调用会修改案件状态的 `evaluate_admission_case()` 或审批端点。M1 的模拟输入与真实模型调用要分别标注。
 
-| 角色 | 主要动作 | 约束 |
-| --- | --- | --- |
-| 采购专员 | 创建申请、上传材料、补件 | 不能审批自己的申请 |
-| 采购经理 | 审批报价、履约和例外风险 | 不能与提交人是同一用户 |
-| 质量经理 | 仅保留角色定义 | 本期不创建演示账号或审批流程 |
-| 管理员 | 仅保留角色定义 | 本期不创建演示账号或管理员页面 |
-
-## 领域状态与规则
-
-不同对象使用独立状态，禁止将案件进度、供应商资格、运行结果和人工决定混在同一枚举中：
-
-| 对象 | 状态 | 含义 |
-| --- | --- | --- |
-| 准入案件 | `draft`、`pending_documents`、`analyzing`、`evidence_reviewing`、`pending_approval`、`approved`、`rejected`、`archived` | 描述一次准入案件的流程进度与终态 |
-| 供应商资格 | `candidate`、`approved`、`suspended`、`expired`、`rejected` | 描述供应商是否具备常规采购资格 |
-| 采购例外案件 | `draft`、`pending_approval`、`approved`、`rejected`、`expired`、`archived` | 二期领域定义；十天 MVP 不实现 |
-| 工作流运行 | `queued`、`running`、`succeeded`、`failed` | 描述解析、检索或 Agent 节点的技术运行结果 |
-| 证据充分性 | `sufficient`、`insufficient` | 描述是否找到足以支持风险解释的制度或案例证据 |
-
-完整定义以 `project_docs/VendorGuard-状态数据字典.md` 为准。证据尚未评估时使用空值，不增加 `not_evaluated`；准入审批可退回 `pending_documents` 补件；工作流重试创建新运行记录，不能覆盖旧的 `failed` 记录。
-
-合格供应商池（AVL）是当前有效且资格为 `approved` 的供应商投影。采购例外和限时豁免均保留为后续领域设计，十天 MVP 不实现。
-
-七条规则均保留为领域设计，其中两条进入十天 MVP 实现：
-
-| ID | 条件 | 结果 | 本期状态 |
-| --- | --- | --- | --- |
-| `VEN-001` | 材料中的营业执照已过期、字段矛盾或无法判读 | 阻断或人工核验 | 实现并验证 |
-| `VEN-002` | 按供应商品类要求的必填材料缺失 | 要求补件 | 实现并验证 |
-| `VEN-003` | 质量证书剩余不足 90 天 | 质量经理复核 | 延期实现 |
-| `VEN-004` | 币种、单位、税口径和基准日期可比时，报价高于基准价 20% 以上 | 采购经理复核 | 延期实现 |
-| `VEN-005` | 存在足够历史记录且准时交付率低于 90% | 采购经理复核 | 延期实现 |
-| `VEN-006` | 关键物料 | 采购经理和质量经理双审批 | 延期实现 |
-| `PR-001` | PR 使用当前不在 AVL 的供应商 | 创建仅适用于该 PR 的例外审批 | 二期实现 |
-
-规则阈值是教学模拟值，必须配置化，不能写死在 Prompt 或业务代码中。系统只能核验上传材料的一致性与声明有效期；未接入权威数据源时，不得声称已验证营业执照、证书或供应商主体的真实性。首次合作且没有历史履约数据时，记录“历史数据不足”并转人工复核，不按低履约率处理。
-
-## Agent、RAG 与人工边界
-
-| 层级 | 职责 | 输出 |
-| --- | --- | --- |
-| 确定性工具 | 解析、日期/价格/履约计算、规则匹配、权限校验 | 可验证事实和规则命中 |
-| 供应商分析 Agent | 汇总解析事实、来源和规则命中 | 结构化风险摘要 |
-| 证据 Agent | 检索制度和案例，验证风险解释 | 引用、处置建议、缺证据标记 |
-| 确定性编排图 | 路由状态、补件、审批和恢复 | 案件状态、待办、摘要 |
-| 人工审批 | 对准入案件批准或拒绝；规则负责触发补件 | 最终决定与理由 |
-
-LangGraph 只编排供应商准入的固定节点，不让大模型自行决定流程路由。RAG 只回答“依据和建议是什么”，不决定“是否准入”。没有证据时返回“证据不足”；解析或模型调用异常则记录独立的节点失败事件。人工决定不覆盖历史规则命中，只追加决定和审计事件。
-
-## 工程要求
-
-- 采用 Python、FastAPI、PostgreSQL、pgvector、LangGraph 和 React 的组合；按实际阶段逐步引入依赖
-- 每个 Agent 使用 Pydantic 结构化输出，并保存运行状态、耗时、输入和输出引用
-- 每项风险关联原始材料证据和制度/案例证据
-- 审计日志只追加，不更新或删除
-- 文档分块保留版本、生效期、章节或页码；权限元数据与过滤延期实现
-- 所有演示数据必须是自制、公开模板或完全脱敏数据
-
-代码采用精简的模块化单体。十天 MVP 的活跃业务模块是 `admission`、`policy` 和 `evidence`；`purchase_exceptions` 作为二期占位保留，采购经理决定直接作为准入模块能力实现，不建立通用审批任务系统。供应商资格、认证、数据库、日志、审计和模型接入先使用根目录单文件。只有单文件出现多种独立职责或明显难以测试时才继续拆分。HTTP 路由只负责协议转换，业务规则和状态不放在路由中。前端仍交付登录、案件队列和统一案件详情三个入口。
-
-当前只保留以下骨架，不提前铺设空的 `routes.py`、`models.py` 或 `repositories.py`：
-
-```text
-VendorGuard/
-├─ src/vendorguard/
-│  ├─ admission/
-│  ├─ purchase_exceptions/
-│  ├─ approvals/
-│  ├─ policy/
-│  └─ evidence/
-├─ data/
-│  ├─ demo/
-│  ├─ knowledge/
-│  └─ evals/
-├─ policies/
-├─ tests/
-├─ frontend/
-└─ project_docs/
-```
-
-`app.py`、`config.py`、`database.py`、`security.py`、`logging.py`、`audit.py`、`suppliers.py`、`storage.py` 和 `llm.py` 等文件只在实现对应功能时创建。
-
-## 编码规范
-
-- 每个模块级类、函数、方法和测试用例（含 `test_` 前缀函数）必须写中文 docstring。
-  - 单句能讲清的用单行：`"""营业执照状态正常时 VEN-001 不命中，也不返回处置结果。"""`
-  - 涉及防坑、跨规则差异或多重职责的写成段落：第一段说"做什么"，第二段说"为什么这样设计"或"与 X 的差异"。
-  - 行内注释只解释"当前这行在做什么"，不承担文档责任。
-- Docstring 面向读者是"未来接手这个项目的开发者"，不是"编译器"，不要复述代码本身在做什么。
-
-## 新对话的协作方式
-
-- 始终使用中文，面向第一次独立开发完整项目的学习者解释。
-- 每个步骤先讲“为什么做”，再讲“具体怎么做”。尽量先提供代码，然后给讲解，教开发者怎么做。然后让开发者自己写、或者复制粘贴提供的代码。但一定是他理解。
-- 涉及操作时写明目标文件、PowerShell 命令、预期结果和验证方法。
-- 用户提出概念问题时先回答问题；未明确要求修改时，不直接改代码。
-- 安装依赖、下载资源或大规模写文件前先说明影响和目标位置，优先使用 D 盘。
-- 保留已有文档和用户改动；不要复制 `flo_prj` 中的 MD5、硬编码 JWT、同步 PyMySQL、异常原文泄露或庞大依赖集合。
-
-## 下一步
-
-三个原始演示案例已经完成定义，十天 MVP 只使用前两个：
-
-1. `data/demo/cases/normal_admission.yaml`：正常准入
-2. `data/demo/cases/supplement_review.yaml`：补件后复核
-3. `data/demo/cases/procurement_exception.yaml`：二期采购例外设计样例，不进入本期运行和验收
-
-这些文件仍是结构化模拟事实，尚未通过完整准入工作流执行验证。正常准入和补件案例只以 `VEN-001`、`VEN-002` 为本期规则合同；来源位置使用固定模拟页码、单元格或行号，不生成或解析真实 PDF、XLSX、CSV 材料。
-
-`VEN-001` 至 `VEN-006`、`PR-001` 的领域定义继续保留；`policies/rules/v1.0.0.yaml` 已按 MVP 范围把 `enabled_rule_ids` 收敛为 `VEN-001`、`VEN-002`，其余五条（`VEN-003` 至 `VEN-006`、`PR-001`）全部放入 `deferred_rule_ids`。Day 1 至 Day 3 已完成并验收。
-
-2026-09-02 已完成创建供应商、创建准入案件、材料元数据登记、案件详情、最小状态迁移 HTTP 接口、版本化 YAML Schema 以及 `VEN-001` 的首批执行行为。
-
-2026-09-05 已完成 Day 4 三条完成判定里的第 1、3 条：YAML 启用清单收敛为 `VEN-001`/`VEN-002`，两条规则共 9 条聚焦测试通过；采购经理审批决定端点上线，覆盖 approved/rejected/supplement_requested 三种决定的案件迁移、供应商资格联动、3 条有序审计事件、角色隔离、参数校验、状态非法回退和审计失败事务回滚，集成测试累计 8 条通过。Day 4 完成判定第 2 条“正常准入进入待审批状态”依赖 Day 5 的结构化事实抽取与规则 outcome 应用，Day 4 未虚假宣告完成，记入 Day 5 起点。
-
-2026-09-05 已完成 Day 5：结构化模拟事实层（`StructuredFacts` + `load_demo_case_facts` + 确定性计算）、评估编排 `evaluate_admission_case`（按 `enabled_rule_ids` 评估、驱动 `analyzing`/`pending_documents`、有序审计）、评估端点 `POST /api/admission/cases/{id}/evaluation` 与审计扩展迁移 `0a22cbb97473` 全部通过自动化测试（累计 117 项）。按方案 B，案件本期最远走到 `analyzing`（补件案经 `pending_documents` 可重跑并保留历史命中），`pending_approval` 依赖 Day 6 证据审校未推进，Day 4 完成判定第 2 条据此只部分兑现。
-
-2026-09-08 Day 6 当前状态：10 份正式快照、33,244 字符归一化正文、来源与正文哈希清单，以及 15 个固定问题评测集已完成。此前实现后撤回的节点解析、持久化、入库和检索代码不视为现有能力。下一步先将归一化正文解析为 `KnowledgeNode` 与 `RetrievalChunk`，再实现入库、候选资格硬过滤、结构化/BM25/向量召回和离线指标。仍不解析真实 PDF、XLSX、CSV 文件；在证据环节落地后，才评估把准入案件从 `analyzing` 经 `evidence_reviewing` 推进到 `pending_approval`，以正式补齐 Day 4 完成判定第 2 条。
-
-## 开发顺序
-
-1. 完成 `VEN-001`、`VEN-002` 规则执行 ✅，用结构化模拟事实经评估编排跑通正常准入（到 `analyzing`）与规则补件（`VEN-002`→`pending_documents`、可重跑保留历史）✅；推进到 `pending_approval` 待 Day 6 证据审校
-2. 实现采购经理通过/拒绝 ✅、提交人隔离（当前角色模型天然保证，见 `record_admission_decision` docstring）✅、JSON 分析快照（未开始）、追加式审计 ✅
-3. 基于已冻结的 10 份语料和 15 题评测集，实现节点解析、全文检索、pgvector、简单融合、引用和无证据拒答
-4. 用 LangGraph 串联两个受控 Agent，验证一个失败节点恢复场景
-5. 完成登录、案件队列、统一案件详情三个前端入口和一条 Playwright 主流程
-6. 完成简单 CI、README、架构图和本地演示说明
-
-## 交付标准
-
-正常准入必须能从页面完整跑通，规则触发补件至少通过接口流程验证。前端展示固定结构化事实的模拟材料来源和 RAG 制度引用；`VEN-001`、`VEN-002`、提交人隔离、检索拒答和一个状态恢复场景有自动化测试。真实文件解析、采购例外、质量经理、双人审批、豁免、管理员页面和应用容器化不属于本期完成条件。
+M1 完成后再做一种真实材料输入和基础 RAG。新的里程碑进度仅在 [Agent 开发计划](project_docs/VendorGuard-Agent开发计划.md) 更新，避免再维护多套看板。
