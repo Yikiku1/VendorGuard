@@ -22,10 +22,16 @@ logs/
 *.log
 
 # Editor and local database files
+.idea/
 .vscode/
 *.db
 *.sqlite
 *.sqlite3
+
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini
 
 .qoder/
 
@@ -35,5 +41,7 @@ project_docs/VendorGuard-对话式待办卡片工具调研.md
 project_docs/VendorGuard-RAG检索栈交接.md
 project_docs/VendorGuard-RAG重构资料调研.md
 project_docs/VendorGuard-RAG语料候选与来源核验.md
+# Agent instructions and rules
 AGENTS.md
-AGENTS.md
+CLAUDE.md
+
