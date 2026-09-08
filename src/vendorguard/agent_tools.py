@@ -20,7 +20,6 @@ from .policy import (
     evaluate_rule,
 )
 
-
 # 与 facts.py 的白名单一致, 顺序用于确定性的缺字段报告。
 _FACT_FIELDS = (
     "business_license_document_status",
@@ -68,9 +67,7 @@ def parse_tool_arguments(raw_json: str) -> StructuredFacts:
         raise ToolArgumentError(f"工具参数未通过事实 Schema 校验: {exc}") from exc
 
 
-def _verify_against_snapshot(
-    facts: StructuredFacts, submitted: StructuredFacts
-) -> None:
+def _verify_against_snapshot(facts: StructuredFacts, submitted: StructuredFacts) -> None:
     """逐项比对模型参数与真实提交快照的事实值和来源。
 
     补造, 改写和漏传都会体现为某个字段的值或来源不相等, 必须
