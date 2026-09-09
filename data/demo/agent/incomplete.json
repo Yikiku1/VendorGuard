@@ -1,0 +1,8 @@
+{
+  "business_license_document_status": "valid",
+  "category_required_documents_complete": false,
+  "sources": {
+    "business_license_document_status": "BL-001@page_1",
+    "category_required_documents_complete": "CHECKLIST-001@row_2"
+  }
+}
