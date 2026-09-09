@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from openai import OpenAI
 from openai.types.chat import (
@@ -78,6 +78,9 @@ class AgentRunOutcome(BaseModel):
     model_requests: int
     tool_attempts: int
     elapsed_seconds: float
+    prompt_tokens: int
+    completion_tokens: int
+    tool_events: list[dict[str, Any]]
 
 
 def _claims_checked(text: str) -> bool:
@@ -116,6 +119,9 @@ def run_check(
     tool_attempts = 0
     corrections_used = 0
     executed_ok = False
+    prompt_tokens = 0
+    completion_tokens = 0
+    tool_events: list[dict[str, Any]] = []
     
     def finish(kind: Literal["answer", "failed"], text: str) -> AgentRunOutcome:
         return AgentRunOutcome(
@@ -124,6 +130,9 @@ def run_check(
             model_requests=model_requests,
             tool_attempts=tool_attempts,
             elapsed_seconds=time.monotonic() - started,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            tool_events=list(tool_events),
         )
 
     while True:
@@ -144,6 +153,10 @@ def run_check(
             )
         except Exception as exc:
             return finish("failed", f"模型请求失败: {exc}")
+        
+        if completion.usage is not None:
+            prompt_tokens += completion.usage.prompt_tokens
+            completion_tokens += completion.usage.completion_tokens
         
         message = completion.choices[0].message
         # assistant 的 tool_calls 必须原样回写历史, 调用 ID 对应是协议要求;
@@ -192,6 +205,14 @@ def run_check(
                         ),
                     )
                 )
+                tool_events.append(
+                    {
+                        "tool_call_id": call.id,
+                        "name": f"<type:{call.type}>",
+                        "status": "error",
+                        "detail": f"不支持的工具调用类型: {call.type}",
+                    }
+                )
                 continue
 
             if call.function.name != "check_materials":
@@ -209,6 +230,14 @@ def run_check(
                         ),
                     )
                 )
+                tool_events.append(
+                    {
+                        "tool_call_id": call.id,
+                        "name": call.function.name,
+                        "status": "error",
+                        "detail": f"未知工具: {call.function.name}",
+                    }
+                )
                 continue
             
             try:
@@ -225,6 +254,14 @@ def run_check(
                         content=json.dumps({"error": str(exc)}, ensure_ascii=False),
                     )
                 )
+                tool_events.append(
+                    {
+                        "tool_call_id": call.id,
+                        "name": call.function.name,
+                        "status": "error",
+                        "detail": str(exc),
+                    }
+                )
                 continue
 
             executed_ok = True
@@ -234,6 +271,14 @@ def run_check(
                     tool_call_id=call.id,
                     content=result.model_dump_json(),
                 )
+            )
+            tool_events.append(
+                {
+                    "tool_call_id": call.id,
+                    "name": "check_materials",
+                    "status": "ok",
+                    "detail": result.model_dump(),
+                }
             )
 
     # 循环只有 return 出口, 不会无界运行

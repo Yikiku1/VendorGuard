@@ -18,6 +18,7 @@ from openai.types.chat import (
 )
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_message_tool_call import Function
+from openai.types.completion_usage import CompletionUsage
 
 from vendorguard.agent import run_check
 from vendorguard.policy import StructuredFacts, load_policy
@@ -144,6 +145,9 @@ def test_bad_json_gets_structured_error_and_correction(policy) -> None:
     assert outcome.kind == "answer"
     assert outcome.model_requests == 3
     assert outcome.tool_attempts == 2
+    assert outcome.tool_events[0]["status"] == "error"
+    assert outcome.tool_events[0]["name"] == "check_materials"
+    assert "不是合法 JSON" in outcome.tool_events[0]["detail"]
     error_message = client.completions.calls[1]["messages"][-1]
     assert error_message["role"] == "tool"
     assert error_message["tool_call_id"] == "call_test_1"
@@ -308,3 +312,63 @@ def test_network_failure_ends_immediately(policy) -> None:
 
     assert outcome.kind == "failed"
     assert outcome.model_requests == 1
+
+
+# --- E1-a: token 用量与工具事件流水 ---------------------------------------------------
+
+
+def with_usage(completion: ChatCompletion, prompt: int, generated: int) -> ChatCompletion:
+    """给剧本响应补上 token 用量, 模拟真实 SDK 的 usage 字段."""
+
+    return completion.model_copy(
+        update={
+            "usage": CompletionUsage(
+                completion_tokens=generated,
+                prompt_tokens=prompt,
+                total_tokens=prompt + generated,
+            )
+        }
+    )
+
+
+def test_outcome_reports_usage_totals_and_tool_events(policy) -> None:
+    """正常往返后累计跨请求的 token 用量, 并记录工具事件流水."""
+
+    client = FakeClient(
+        [
+            with_usage(tool_call_response(submitted_facts().model_dump()), 100, 20),
+            with_usage(text_response("检查完成, 两条规则均为 not_hit."), 200, 30),
+        ]
+    )
+
+    outcome = run_check(
+        "请检查这家供应商的材料", submitted=submitted_facts(), policy=policy, client=client
+    )
+
+    assert outcome.prompt_tokens == 300
+    assert outcome.completion_tokens == 50
+    assert len(outcome.tool_events) == 1
+    event = outcome.tool_events[0]
+    assert event["name"] == "check_materials"
+    assert event["status"] == "ok"
+    assert event["tool_call_id"] == "call_test_1"
+    assert [e["result"] for e in event["detail"]["evaluations"]] == ["not_hit", "not_hit"]
+
+
+def test_unknown_tool_recorded_as_error_event(policy) -> None:
+    """未知工具与成功调用都要入流水, 状态分别为 error 和 ok."""
+
+    client = FakeClient(
+        [
+            tool_call_response({}, call_id="call_evil", name="drop_all_tables"),
+            tool_call_response(submitted_facts().model_dump(), call_id="call_ok"),
+            text_response("最终只有真实检查结果可信."),
+        ]
+    )
+
+    outcome = run_check(
+        "请检查这家供应商的材料", submitted=submitted_facts(), policy=policy, client=client
+    )
+
+    assert [event["status"] for event in outcome.tool_events] == ["error", "ok"]
+    assert outcome.tool_events[0]["tool_call_id"] == "call_evil"
