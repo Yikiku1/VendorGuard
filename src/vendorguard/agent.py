@@ -7,13 +7,17 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import re
 import time
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from dotenv import dotenv_values
 from openai import OpenAI
 from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
@@ -26,7 +30,7 @@ from openai.types.chat import (
 from pydantic import BaseModel, ConfigDict
 
 from .agent_tools import ToolArgumentError, check_materials, parse_tool_arguments
-from .policy import PolicyDocument, StructuredFacts
+from .policy import PolicyDocument, StructuredFacts, load_policy
 
 SYSTEM_PROMPT = (
     "你是供应商材料审查助手. 检查供应商材料是否满足准入要求时, "
@@ -292,6 +296,56 @@ def run_check(
 
     # 循环只有 return 出口, 不会无界运行
 
+
+class AgentConfigError(ValueError):
+    """Agent 启动入口缺少必需配置或事实样例非法时抛出的错误."""
+
+
+class LlmSettings(BaseModel):
+    """模型接线必需的三项配置, 只在 Agent 启动入口检查."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_name: str
+    api_key: str
+    base_url: str
+
+
+_REQUIRED_ENV = {
+    "VENDORGUARD_LLM_MODEL": "model_name",
+    "VENDORGUARD_LLM_API_KEY": "api_key",
+    "VENDORGUARD_LLM_BASE_URL": "base_url",
+}
+
+
+def load_llm_settings(env: Mapping[str, str | None]) -> LlmSettings:
+    """从环境变量映射构造模型配置, 缺失时一次报全所有名字.
+
+    dotenv 读出的值可能为 None, 与未定义同样按缺失处理;
+    str() 只是向类型系统声明已通过缺失检查.
+    """
+
+    missing = [name for name in _REQUIRED_ENV if not env.get(name)]
+    if missing:
+        raise AgentConfigError("缺少模型配置: " + ", ".join(missing) + ", 请写入本地 .env")
+    return LlmSettings(
+        **{field: str(env[name]) for name, field in _REQUIRED_ENV.items()}
+    )
+
+
+def load_submitted_facts(path: Path) -> StructuredFacts:
+    """读取事实样例 JSON 并复用工具解析层校验, 错误归一为启动错误."""
+
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise AgentConfigError(f"无法读取事实样例文件: {path}") from exc
+    try:
+        return parse_tool_arguments(raw_text)
+    except ToolArgumentError as exc:
+        raise AgentConfigError(f"事实样例文件未通过校验: {exc}") from exc
+
+
 def write_run_log(
     outcome: AgentRunOutcome,
     *,
@@ -328,4 +382,63 @@ def write_run_log(
     path.write_text(_redact_secret(raw_json), encoding="utf-8")
     return path
 
-__all__ = ["AgentRunOutcome", "run_check", "write_run_log"]
+
+__all__ = [
+    "AgentConfigError",
+    "AgentRunOutcome",
+    "load_llm_settings",
+    "load_submitted_facts",
+    "main",
+    "run_check",
+    "write_run_log",
+]
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """命令行入口: python -m vendorguard.agent <事实样例文件> [请求文本].
+
+    返回码: 0 正常回答或追问, 1 运行失败, 2 启动配置错误.
+    """
+
+    parser = argparse.ArgumentParser(prog="vendorguard.agent", description="M1 材料审查 agent")
+    parser.add_argument("facts_file", type=Path, help="结构化事实样例 JSON 路径(模拟输入)")
+    parser.add_argument(
+        "request", nargs="?", default="请检查这家供应商的材料是否满足准入要求."
+    )
+    args = parser.parse_args(argv)
+    started_at = datetime.now()
+    
+    try:
+        settings = load_llm_settings({**dotenv_values(".env"), **os.environ})
+        facts = load_submitted_facts(args.facts_file)
+        policy = load_policy(Path("policies/rules/v1.0.0.yaml"))
+    except AgentConfigError as exc:
+        print(f"启动失败: {exc}")
+        return 2
+    
+    client = OpenAI(
+        api_key=settings.api_key,
+        base_url=settings.base_url,
+        timeout=30.0,
+        max_retries=0,
+    )
+    outcome = run_check(
+        args.request,
+        submitted=facts,
+        policy=policy,
+        client=client,
+        model_name=settings.model_name,
+    )
+    print(outcome.text)
+    log_path = write_run_log(
+        outcome,
+        model_name=settings.model_name,
+        log_dir=Path("logs/agent-runs"),
+        started_at=started_at,
+    )
+    print(f"运行记录: {log_path}")
+    return 0 if outcome.kind == "answer" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

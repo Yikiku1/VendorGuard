@@ -21,7 +21,14 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_message_tool_call import Function
 from openai.types.completion_usage import CompletionUsage
 
-from vendorguard.agent import AgentRunOutcome, run_check, write_run_log
+from vendorguard.agent import (
+    AgentConfigError,
+    AgentRunOutcome,
+    load_llm_settings,
+    load_submitted_facts,
+    run_check,
+    write_run_log,
+)
 from vendorguard.policy import StructuredFacts, load_policy
 
 RULES_PATH = Path("policies/rules/v1.0.0.yaml")
@@ -435,3 +442,74 @@ def test_write_run_log_redacts_api_key_style_secrets(tmp_path) -> None:
     written = path.read_text(encoding="utf-8")
     assert "sk-abcdefghij1234567890" not in written
     assert "sk-***" in written
+
+
+# --- E1-c: 启动入口配置与事实加载 -------------------------------------------------
+
+
+FULL_ENV = {
+    "VENDORGUARD_LLM_MODEL": "qwen3.7-flash",
+    "VENDORGUARD_LLM_API_KEY": "sk-test-not-real",
+    "VENDORGUARD_LLM_BASE_URL": "https://example.test/compatible-mode/v1",
+}
+
+
+def test_load_llm_settings_reports_all_missing_names() -> None:
+    """空环境一次报出全部缺失变量, 不挤牙膏逐个试错."""
+
+    with pytest.raises(AgentConfigError) as exc_info:
+        load_llm_settings({})
+
+    message = str(exc_info.value)
+    assert "VENDORGUARD_LLM_MODEL" in message
+    assert "VENDORGUARD_LLM_API_KEY" in message
+    assert "VENDORGUARD_LLM_BASE_URL" in message
+    assert "sk-" not in message  # 报错消息自身不得携带任何密钥样式内容
+
+
+def test_load_llm_settings_treats_empty_value_as_missing() -> None:
+    """变量存在但值为空同样算缺失, 覆盖 .env 里写了 KEY= 的情况."""
+
+    env = {**FULL_ENV, "VENDORGUARD_LLM_API_KEY": ""}
+    with pytest.raises(AgentConfigError, match="VENDORGUARD_LLM_API_KEY"):
+        load_llm_settings(env)
+
+
+def test_load_llm_settings_returns_values_when_complete() -> None:
+    """三项齐备时逐字段映射到配置对象."""
+
+    settings = load_llm_settings(FULL_ENV)
+
+    assert settings.model_name == "qwen3.7-flash"
+    assert settings.api_key == "sk-test-not-real"
+    assert settings.base_url == "https://example.test/compatible-mode/v1"
+
+
+def test_load_submitted_facts_reads_valid_and_unknown_variants(tmp_path) -> None:
+    """正常样例还原全部事实; 未知变体不写完整性字段即得 None."""
+
+    normal = tmp_path / "normal.json"
+    normal.write_text(
+        json.dumps(submitted_facts().model_dump(), ensure_ascii=False), encoding="utf-8"
+    )
+    facts = load_submitted_facts(normal)
+    assert facts.category_required_documents_complete is True
+
+    unknown = tmp_path / "unknown.json"
+    payload = submitted_facts().model_dump()
+    del payload["category_required_documents_complete"]
+    payload["sources"].pop("category_required_documents_complete")
+    unknown.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    assert load_submitted_facts(unknown).category_required_documents_complete is None
+
+
+def test_load_submitted_facts_rejects_bad_input(tmp_path) -> None:
+    """文件不存在或内容非法都归一为 AgentConfigError, 不向外抛裸异常."""
+
+    with pytest.raises(AgentConfigError):
+        load_submitted_facts(tmp_path / "nope.json")
+
+    broken = tmp_path / "broken.json"
+    broken.write_text("{ not json", encoding="utf-8")
+    with pytest.raises(AgentConfigError):
+        load_submitted_facts(broken)
