@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,7 +21,7 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_message_tool_call import Function
 from openai.types.completion_usage import CompletionUsage
 
-from vendorguard.agent import run_check
+from vendorguard.agent import AgentRunOutcome, run_check, write_run_log
 from vendorguard.policy import StructuredFacts, load_policy
 
 RULES_PATH = Path("policies/rules/v1.0.0.yaml")
@@ -372,3 +373,65 @@ def test_unknown_tool_recorded_as_error_event(policy) -> None:
 
     assert [event["status"] for event in outcome.tool_events] == ["error", "ok"]
     assert outcome.tool_events[0]["tool_call_id"] == "call_evil"
+
+
+# --- E1-b: 运行记录器 ------------------------------------------------------------
+
+
+def make_outcome(text: str = "两条规则均为 not_hit.", kind: str = "answer") -> AgentRunOutcome:
+    """构造一份标准运行产出, 供记录器测试复用."""
+
+    return AgentRunOutcome(
+        kind=kind,
+        text=text,
+        model_requests=2,
+        tool_attempts=1,
+        elapsed_seconds=1.25,
+        prompt_tokens=300,
+        completion_tokens=50,
+        tool_events=[
+            {
+                "tool_call_id": "call_1",
+                "name": "check_materials",
+                "status": "ok",
+                "detail": {"policy_version": "1.0.0"},
+            }
+        ],
+    )
+
+
+def test_write_run_log_records_expected_fields(tmp_path) -> None:
+    """运行记录写入带时间戳的 JSON 文件, 字段覆盖方案要求."""
+
+    path = write_run_log(
+        make_outcome(),
+        model_name="qwen3.7-flash",
+        log_dir=tmp_path,
+        started_at=datetime(2026, 9, 9, 10, 30, 0),
+    )
+
+    assert path.parent == tmp_path
+    assert path.name.startswith("20260909T103000")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["model"] == "qwen3.7-flash"
+    assert payload["simulated_input"] is True
+    assert payload["kind"] == "answer"
+    assert payload["text"] == "两条规则均为 not_hit."
+    assert payload["usage"] == {"prompt_tokens": 300, "completion_tokens": 50}
+    assert payload["tool_events"][0]["status"] == "ok"
+    assert payload["elapsed_seconds"] == 1.25
+
+
+def test_write_run_log_redacts_api_key_style_secrets(tmp_path) -> None:
+    """文本里意外混入 sk- 样式密钥时, 落盘前必须整体打码."""
+
+    path = write_run_log(
+        make_outcome(text="模型请求失败: Authorization: sk-abcdefghij1234567890", kind="failed"),
+        model_name="qwen3.7-flash",
+        log_dir=tmp_path,
+        started_at=datetime(2026, 9, 9, 10, 30, 0),
+    )
+
+    written = path.read_text(encoding="utf-8")
+    assert "sk-abcdefghij1234567890" not in written
+    assert "sk-***" in written

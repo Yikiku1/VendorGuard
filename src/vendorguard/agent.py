@@ -8,7 +8,10 @@
 from __future__ import annotations
 
 import json
+import re
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal, cast
 
 from openai import OpenAI
@@ -81,6 +84,12 @@ class AgentRunOutcome(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     tool_events: list[dict[str, Any]]
+
+
+def _redact_secret(text: str) -> str:
+    """把 sk- 样式的密钥串整体打码, 防止异常消息夹带 key 入档."""
+    
+    return re.sub(r"sk-[A-Za-z0-9]{8,}", "sk-***", text)
 
 
 def _claims_checked(text: str) -> bool:
@@ -283,5 +292,40 @@ def run_check(
 
     # 循环只有 return 出口, 不会无界运行
 
+def write_run_log(
+    outcome: AgentRunOutcome,
+    *,
+    model_name: str,
+    log_dir: Path,
+    started_at: datetime,
+    simulated: bool = True,
+) -> Path:
+    """把一次运行落盘为脱敏 JSON, 返回写入的文件路径.
 
-__all__ = ["AgentRunOutcome", "run_check"]
+    记录模型标识, 模拟输入标记, 工具事件, 最终文本, 耗时与 token
+    用量; 不写 API Key 或请求头, 对 sk- 样式密钥做兜底打码.
+    started_at 由调用方显式传入, 保证文件名可测且同一秒不覆盖.
+    """
+    
+    log_dir.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "model": model_name,
+        "simulated_input": simulated,
+        "kind": outcome.kind,
+        "text": outcome.text,
+        "model_requests": outcome.model_requests,
+        "tool_attempts": outcome.tool_attempts,
+        "elapsed_seconds": outcome.elapsed_seconds,
+        "usage": {
+            "prompt_tokens": outcome.prompt_tokens,
+            "completion_tokens": outcome.completion_tokens,
+        },
+        "tool_events": outcome.tool_events,
+    }
+    path = log_dir / f"{started_at:%Y%m%dT%H%M%S%f}.json"
+    raw_json = json.dumps(payload, ensure_ascii=False, indent=2)
+    path.write_text(_redact_secret(raw_json), encoding="utf-8")
+    return path
+
+__all__ = ["AgentRunOutcome", "run_check", "write_run_log"]
