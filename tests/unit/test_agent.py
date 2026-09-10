@@ -81,6 +81,12 @@ def text_response(text: str, finish_reason: str = "stop") -> ChatCompletion:
     return _completion(ChatCompletionMessage(role="assistant", content=text), finish_reason)
 
 
+def ask_user_response(question: str, call_id: str = "call_ask_1") -> ChatCompletion:
+    """剧本: 模型调用 ask_user 追问工具."""
+
+    return tool_call_response({"question": question}, call_id=call_id, name="ask_user")
+
+
 def _completion(message: ChatCompletionMessage, finish_reason: str = "stop") -> ChatCompletion:
     return ChatCompletion(
         id="chatcmpl-test",
@@ -249,17 +255,22 @@ def test_false_claim_without_call_forces_correction(policy) -> None:
 
 
 def test_followup_question_ends_run(policy) -> None:
-    """信息不足时允许直接追问: 一次请求即结束, 零工具调用."""
+    """纯文本问句不再直接放行: 经一次纠正后改用 ask_user 才能以 question 结束."""
 
-    client = FakeClient([text_response("请问该品类的必填材料清单是什么? 请补充后我再重新检查.")])
+    client = FakeClient(
+        [
+            text_response("请问该品类的必填材料清单是什么? 请补充后我再重新检查."),
+            ask_user_response("该品类的必填材料清单是什么? 请提供后我再检查."),
+        ]
+    )
 
     outcome = run_check(
         "帮我看看这家供应商", submitted=submitted_facts(), policy=policy, client=client
     )
 
     assert outcome.kind == "question"
-    assert outcome.model_requests == 1
-    assert outcome.tool_attempts == 0
+    assert outcome.model_requests == 2
+    assert outcome.tool_attempts == 1
 
 
 def test_model_request_budget_cap(policy) -> None:
@@ -661,3 +672,178 @@ def test_run_log_includes_request_context(policy, tmp_path) -> None:
     assert payload["user_request"] == "请检查这家供应商"
     assert payload["submitted_facts"]["business_license_document_status"] == "valid"
     assert payload["policy_version"] == "1.0.0"
+
+
+# --- 评审二轮: ask_user 追问通道与异常边界 ---------------------------------------
+
+
+def test_punctuation_bypass_now_requires_ask_user(policy) -> None:
+    """评审复现句: 带问号的结论性纯文本不得放行, 只能经纠正转向 ask_user."""
+
+    client = FakeClient(
+        [
+            text_response("材料齐全, 供应商已获批准。还有问题吗?"),
+            ask_user_response("请问您需要检查哪家供应商的准入材料?"),
+        ]
+    )
+
+    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.kind == "question"
+    assert outcome.model_requests == 2
+    correction = client.completions.calls[1]["messages"][-1]
+    assert correction["role"] == "user"
+    assert "ask_user" in correction["content"]
+
+
+def test_ask_user_recorded_and_ends_run(policy) -> None:
+    """合法 ask_user: 入事件流水, kind=question, 一次请求即结束."""
+
+    client = FakeClient([ask_user_response("请问要检查哪家供应商?")])
+
+    outcome = run_check("帮我看看", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.kind == "question"
+    assert outcome.model_requests == 1
+    assert outcome.tool_attempts == 1
+    event = outcome.tool_events[0]
+    assert event["name"] == "ask_user"
+    assert event["status"] == "ok"
+    assert event["detail"]["question"] == "请问要检查哪家供应商?"
+
+
+def test_ask_user_empty_question_uses_correction_budget(policy) -> None:
+    """question 为空属参数错误: 走共享纠正预算, 改正后正常结束."""
+
+    client = FakeClient(
+        [
+            ask_user_response("", call_id="call_ask_bad"),
+            ask_user_response("需要检查的是哪家公司?", call_id="call_ask_ok"),
+        ]
+    )
+
+    outcome = run_check("帮我看看", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.kind == "question"
+    assert [event["status"] for event in outcome.tool_events] == ["error", "ok"]
+
+
+def test_multiple_calls_in_one_response_rejected(policy) -> None:
+    """一次响应携带多个工具调用: 整体拒绝, 每个调用仍计数, 纠正后可继续."""
+
+    dual = ChatCompletionMessage(
+        role="assistant",
+        content="",
+        tool_calls=[
+            ChatCompletionMessageToolCall(
+                id="call_d1",
+                type="function",
+                function=Function(name="ask_user", arguments=json.dumps({"question": "问题一?"})),
+            ),
+            ChatCompletionMessageToolCall(
+                id="call_d2",
+                type="function",
+                function=Function(name="ask_user", arguments=json.dumps({"question": "问题二?"})),
+            ),
+        ],
+    )
+    client = FakeClient(
+        [_completion(dual), ask_user_response("一次只问一个: 需要检查哪家?", call_id="call_ask_ok")]
+    )
+
+    outcome = run_check("帮我看看", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.kind == "question"
+    assert outcome.tool_attempts == 3  # 双调用各计一次 + 纠正后的合法调用
+    assert [event["status"] for event in outcome.tool_events] == ["error", "error", "ok"]
+
+
+def test_ask_user_after_check_keeps_verified_result(policy) -> None:
+    """校验成功后仍可追问: kind=question 但已完成的校验结果保留在流水里."""
+
+    client = FakeClient(
+        [
+            tool_call_response(submitted_facts().model_dump()),
+            ask_user_response("还需要补充其他材料信息吗?", call_id="call_ask_ok"),
+        ]
+    )
+
+    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.kind == "question"
+    assert outcome.tool_events[0]["name"] == "check_materials"
+    assert outcome.tool_events[0]["status"] == "ok"
+    assert [e["result"] for e in outcome.tool_events[0]["detail"]["evaluations"]] == [
+        "not_hit",
+        "not_hit",
+    ]
+
+
+def test_empty_choices_fails_without_crash(policy) -> None:
+    """响应 choices 为空(如内容过滤)不得 IndexError, 必须走明确失败."""
+
+    empty = ChatCompletion(
+        id="chatcmpl-empty",
+        choices=[],
+        created=0,
+        model="test-fake",
+        object="chat.completion",
+    )
+    client = FakeClient([empty])
+
+    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.kind == "failed"
+    assert "choices" in outcome.text
+
+
+def test_tool_internal_error_fails_cleanly(policy, monkeypatch) -> None:
+    """工具执行抛非参数异常: 记录错误事件并明确失败, 不裸崩."""
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("意外内部故障")
+
+    monkeypatch.setattr("vendorguard.agent.check_materials", boom)
+    client = FakeClient([tool_call_response(submitted_facts().model_dump())])
+
+    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.kind == "failed"
+    assert "内部错误" in outcome.text
+    assert outcome.tool_events[-1]["status"] == "error"
+
+
+def test_stale_tool_response_not_executed(policy) -> None:
+    """响应迟到越过总时限: 工具不得执行, 事件流水保持为空并报告超时."""
+
+    scripted = tool_call_response(submitted_facts().model_dump())
+
+    class SlowCompletions:
+        def create(self, **kwargs):
+            time.sleep(0.05)
+            return scripted
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SlowCompletions()))
+
+    outcome = run_check(
+        "请检查", submitted=submitted_facts(), policy=policy, client=client, total_timeout=0.01
+    )
+
+    assert outcome.kind == "failed"
+    assert "时限" in outcome.text
+    assert outcome.tool_events == []
+
+
+def test_write_run_log_redacts_hyphen_underscore_keys(tmp_path) -> None:
+    """脱敏正则必须覆盖带连字符与下划线的密钥样式."""
+
+    path = write_run_log(
+        make_outcome(text="模型请求失败: sk-abc_def-9876543210 leaked", kind="failed"),
+        model_name="qwen3.7-flash",
+        log_dir=tmp_path,
+        started_at=datetime(2026, 9, 10, 12, 0, 0),
+    )
+
+    written = path.read_text(encoding="utf-8")
+    assert "sk-abc_def-9876543210" not in written
+    assert "sk-***" in written

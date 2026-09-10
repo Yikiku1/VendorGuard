@@ -34,14 +34,13 @@ from .policy import PolicyDocument, StructuredFacts, load_policy
 
 SYSTEM_PROMPT = (
     "你是供应商材料审查助手. 检查供应商材料是否满足准入要求时, "
-    "必须调用 check_materials 工具, 参数从用户提交的事实原样取值, 不得改写. "
-    "信息不足时可以直接追问并结束本次检查. "
+    "必须调用 check_materials 工具, 参数从用户提交的事实原样取值, 不得改写; "
+    "事实未知时省略字段, 禁止用 null 或猜测值填充. "
+    "需要向用户提问或说明无法回答时, 必须调用 ask_user 工具, 纯文本不能作为追问出口; "
+    "追问中不得宣告批准, 已完成审批或检查结论. "
+    "若用户问题超出材料准入检查范围(如交付率), 只能说明当前仅支持材料准入检查, "
+    "不得暗示补充材料即可评估其他指标. "
     "回答时忠实转述工具结果: 规则未命中不等于准入批准, 不得自行宣布通过准入."
-    "工具调用被拒绝是你的参数错误, 不是用户材料的问题, 必须改正参数重试, "
-    "不得把调用失败归因于提交材料. "
-    "你只能转述工具返回的处置建议, 不得声称人工审核或审批流程已被实际执行."
-    "若提交的事实不足以构造合法参数, 或用户问题超出 check_materials 的能力范围, "
-    "禁止编造取值(包括 null 或字符串占位), 应以问句向用户追问或说明无法回答的原因."
 )
 
 CHECK_MATERIALS_TOOL: ChatCompletionFunctionToolParam = {
@@ -77,6 +76,40 @@ CHECK_MATERIALS_TOOL: ChatCompletionFunctionToolParam = {
 }
 
 
+ASK_USER_TOOL: ChatCompletionFunctionToolParam = {
+    "type": "function",
+    "function": {
+        "name": "ask_user",
+        "description": (
+            "向用户提出一个补充信息的问题并结束本次运行. "
+            "仅当所需信息不在提交事实与工具结果中时使用. "
+            "问题必须是单一问句, 不得包含批准或检查结论."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "要展示给用户的问题, 非空"},
+            },
+            "required": ["question"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def _parse_ask_user_arguments(raw_json: str) -> str:
+    """解析并校验 ask_user 参数, 非法时抛 ToolArgumentError."""
+
+    try:
+        raw = json.loads(raw_json)
+    except (TypeError, ValueError) as exc:
+        raise ToolArgumentError(f"追问参数不是合法 JSON: {exc}") from exc
+    question = raw.get("question") if isinstance(raw, dict) else None
+    if not isinstance(question, str) or not question.strip():
+        raise ToolArgumentError("追问参数缺少非空的 question 字段")
+    return question
+
+
 class AgentRunOutcome(BaseModel):
     """一次运行的最终产出, E 阶段的本地运行记录直接基于它."""
 
@@ -98,7 +131,7 @@ class AgentRunOutcome(BaseModel):
 def _redact_secret(text: str) -> str:
     """把 sk- 样式的密钥串整体打码, 防止异常消息夹带 key 入档."""
 
-    return re.sub(r"sk-[A-Za-z0-9]{8,}", "sk-***", text)
+    return re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-***", text)
 
 
 def run_check(
@@ -138,7 +171,7 @@ def run_check(
     def finish(kind: Literal["answer", "question", "failed"], text: str) -> AgentRunOutcome:
         return AgentRunOutcome(
             kind=kind,
-            text=text,
+            text=_redact_secret(text),
             model_requests=model_requests,
             tool_attempts=tool_attempts,
             elapsed_seconds=time.monotonic() - started,
@@ -173,6 +206,9 @@ def run_check(
             prompt_tokens += completion.usage.prompt_tokens
             completion_tokens += completion.usage.completion_tokens
 
+        if not completion.choices:
+            return finish("failed", "模型响应缺少 choices, 可能被内容过滤拦截")
+
         message = completion.choices[0].message
         # assistant 的 tool_calls 必须原样回写历史, 调用 ID 对应是协议要求;
         # SDK 的 dump 结果与 assistant 消息协议一致, cast 仅向类型系统声明这一点.
@@ -181,19 +217,19 @@ def run_check(
         )
         calls = message.tool_calls or []
 
+        # 评审修复 #4: 文本与工具两条路径共用同一道迟到检查
+        if time.monotonic() - started >= total_timeout:
+            return finish("failed", f"响应返回时总时限 {total_timeout} 秒已用尽")
+
         if not calls:
             text = (message.content or "").strip()
             if completion.choices[0].finish_reason != "stop":
                 return finish("failed", f"回答被截断或过滤: {completion.choices[0].finish_reason}")
-            if time.monotonic() - started >= total_timeout:
-                return finish("failed", f"响应返回时总时限 {total_timeout} 秒已用尽")
             if not text:
                 return finish("failed", "模型返回空回答")
             if executed_ok:
                 return finish("answer", text)
-            # 无工具背书时唯一合法出口是追问(问句); 其余一律视为待纠正的结论
-            if "?" in text or "\uff1f" in text:
-                return finish("question", text)
+            # 评审修复 #1: 问号不再是合法出口, 纯文本一律待纠正
             if corrections_used >= 1:
                 return finish("failed", "未调用工具就给出结论, 且纠正机会已用尽")
             corrections_used += 1
@@ -201,11 +237,45 @@ def run_check(
                 ChatCompletionUserMessageParam(
                     role="user",
                     content=(
-                        "必须实际调用 check_materials 工具并基于工具结果给出检查结论; "
-                        "若信息不足, 请以问句形式向用户追问."
+                        "检查结论必须来自 check_materials 工具结果; "
+                        "若需要向用户提问, 请调用 ask_user 工具."
                     ),
                 )
             )
+            continue
+
+        if len(calls) > 1:
+            # 评审修复: 一次响应限定一个工具调用, 避免"追问与执行并发"的含混行为
+            tool_attempts += len(calls)
+            if tool_attempts >= max_tool_attempts:
+                return finish("failed", f"工具调用尝试达到上限 {max_tool_attempts} 次")
+            for bad_call in calls:
+                detail = "一次响应只允许一个工具调用"
+                tool_events.append(
+                    {
+                        "tool_call_id": bad_call.id,
+                        "name": (
+                            bad_call.function.name
+                            if bad_call.type == "function"
+                            else f"<type:{bad_call.type}>"
+                        ),
+                        "status": "error",
+                        "detail": detail,
+                        "arguments": (
+                            bad_call.function.arguments if bad_call.type == "function" else None
+                        ),
+                    }
+                )
+                messages.append(
+                    ChatCompletionToolMessageParam(
+                        role="tool",
+                        tool_call_id=bad_call.id,
+                        content=json.dumps({"error": detail}, ensure_ascii=False),
+                    )
+                )
+            if corrections_used >= 1:
+                return finish("failed", "纠正机会已用尽, 模型仍返回多个工具调用")
+            corrections_used += 1
             continue
 
         for call in calls:  # 一次返回多个调用也逐个检查预算, 非法调用同样计数
@@ -240,7 +310,7 @@ def run_check(
                 )
                 continue
 
-            if call.function.name != "check_materials":
+            if call.function.name not in ("check_materials", "ask_user"):
                 if corrections_used >= 1:
                     tool_events.append(
                         {
@@ -275,6 +345,50 @@ def run_check(
                 )
                 continue
 
+            if call.function.name == "ask_user":
+                try:
+                    question = _parse_ask_user_arguments(call.function.arguments)
+                except ToolArgumentError as exc:
+                    if corrections_used >= 1:
+                        tool_events.append(
+                            {
+                                "tool_call_id": call.id,
+                                "name": "ask_user",
+                                "status": "error",
+                                "detail": f"纠正机会已用尽, 追问参数非法: {exc}",
+                                "arguments": call.function.arguments,
+                            }
+                        )
+                        return finish("failed", f"纠正机会已用尽, 追问参数非法: {exc}")
+                    corrections_used += 1
+                    messages.append(
+                        ChatCompletionToolMessageParam(
+                            role="tool",
+                            tool_call_id=call.id,
+                            content=json.dumps({"error": str(exc)}, ensure_ascii=False),
+                        )
+                    )
+                    tool_events.append(
+                        {
+                            "tool_call_id": call.id,
+                            "name": "ask_user",
+                            "status": "error",
+                            "detail": str(exc),
+                            "arguments": call.function.arguments,
+                        }
+                    )
+                    continue
+                tool_events.append(
+                    {
+                        "tool_call_id": call.id,
+                        "name": "ask_user",
+                        "status": "ok",
+                        "detail": {"question": question},
+                        "arguments": call.function.arguments,
+                    }
+                )
+                return finish("question", question)
+
             try:
                 facts = parse_tool_arguments(call.function.arguments)
                 result = check_materials(facts, policy=policy, submitted=submitted)
@@ -308,6 +422,18 @@ def run_check(
                     }
                 )
                 continue
+
+            except Exception as exc:
+                tool_events.append(
+                    {
+                        "tool_call_id": call.id,
+                        "name": "check_materials",
+                        "status": "error",
+                        "detail": f"工具内部错误: {exc}",
+                        "arguments": call.function.arguments,
+                    }
+                )
+                return finish("failed", f"工具内部错误: {exc}")
 
             executed_ok = True
             messages.append(
@@ -461,8 +587,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         client=client,
         model_name=settings.model_name,
     )
-    label = "追问, 未经工具校验" if outcome.kind == "question" else "回答"
-    print(f"[{label}] {outcome.text}")
+    labels = {"answer": "检查说明", "question": "追问", "failed": "运行失败"}
+    print(f"[{labels[outcome.kind]}] {outcome.text}")
+    for event in outcome.tool_events:
+        if event["name"] == "check_materials" and event["status"] == "ok":
+            raw = json.dumps(event["detail"], ensure_ascii=False)
+            print(f"原始校验结果: {raw}")
     log_path = write_run_log(
         outcome,
         model_name=settings.model_name,
