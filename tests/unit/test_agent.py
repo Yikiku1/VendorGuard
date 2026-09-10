@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,6 +33,7 @@ from vendorguard.agent import (
 from vendorguard.policy import StructuredFacts, load_policy
 
 RULES_PATH = Path("policies/rules/v1.0.0.yaml")
+
 
 @pytest.fixture(scope="module")
 def policy():
@@ -73,16 +75,16 @@ def tool_call_response(
     return _completion(message)
 
 
-def text_response(text: str) -> ChatCompletion:
-    """剧本: 模型直接给出文字回答."""
+def text_response(text: str, finish_reason: str = "stop") -> ChatCompletion:
+    """剧本: 模型直接给出文字回答, 可指定结束原因."""
 
-    return _completion(ChatCompletionMessage(role="assistant", content=text))
+    return _completion(ChatCompletionMessage(role="assistant", content=text), finish_reason)
 
 
-def _completion(message: ChatCompletionMessage) -> ChatCompletion:
+def _completion(message: ChatCompletionMessage, finish_reason: str = "stop") -> ChatCompletion:
     return ChatCompletion(
         id="chatcmpl-test",
-        choices=[Choice(finish_reason="stop", index=0, message=message)],
+        choices=[Choice(finish_reason=finish_reason, index=0, message=message)],
         created=0,
         model="test-fake",
         object="chat.completion",
@@ -179,6 +181,8 @@ def test_second_bad_json_exhausts_correction(policy) -> None:
     assert outcome.kind == "failed"
     assert outcome.model_requests == 2
     assert outcome.tool_attempts == 2
+    # 审查修复 #4: 被拒绝的调用也必须入流水
+    assert len(outcome.tool_events) == 2
 
 
 # --- 剧本三: 剩余分支验收 -----------------------------------------------------
@@ -247,13 +251,13 @@ def test_false_claim_without_call_forces_correction(policy) -> None:
 def test_followup_question_ends_run(policy) -> None:
     """信息不足时允许直接追问: 一次请求即结束, 零工具调用."""
 
-    client = FakeClient([text_response("请先补充该品类的必填材料清单, 我再重新检查.")])
+    client = FakeClient([text_response("请问该品类的必填材料清单是什么? 请补充后我再重新检查.")])
 
     outcome = run_check(
         "帮我看看这家供应商", submitted=submitted_facts(), policy=policy, client=client
     )
 
-    assert outcome.kind == "answer"
+    assert outcome.kind == "question"
     assert outcome.model_requests == 1
     assert outcome.tool_attempts == 0
 
@@ -513,3 +517,147 @@ def test_load_submitted_facts_rejects_bad_input(tmp_path) -> None:
     broken.write_text("{ not json", encoding="utf-8")
     with pytest.raises(AgentConfigError):
         load_submitted_facts(broken)
+
+
+# --- 评审收尾: 结论背书, 时效与记录完整性 --------------------------------------
+
+
+def test_unverified_claim_gets_correction_then_answer(policy) -> None:
+    """审查 P1 复现: 无工具就给结论不放行, 先纠正, 纠正后才可下结论."""
+
+    client = FakeClient(
+        [
+            text_response("材料齐全, 营业执照有效, 符合准入要求。"),
+            tool_call_response(submitted_facts().model_dump(), call_id="call_test_2"),
+            text_response("根据工具结果: 两条规则均为 not_hit。"),
+        ]
+    )
+
+    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.kind == "answer"
+    assert outcome.model_requests == 3
+    correction = client.completions.calls[1]["messages"][-1]
+    assert correction["role"] == "user"
+    assert "check_materials" in correction["content"]
+
+
+def test_second_unverified_claim_fails(policy) -> None:
+    """纠正后仍拒绝调用工具: 直接失败, 结论必须工具背书."""
+
+    client = FakeClient(
+        [
+            text_response("材料齐全, 符合准入要求。"),
+            text_response("我确认无需工具, 符合要求。"),
+        ]
+    )
+
+    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.kind == "failed"
+    assert outcome.model_requests == 2
+
+
+def test_empty_final_text_fails(policy) -> None:
+    """空回答不是成功产出, 不得以 answer 或 question 收场."""
+
+    client = FakeClient([text_response("")])
+
+    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.kind == "failed"
+
+
+def test_truncated_response_fails(policy) -> None:
+    """finish_reason 非 stop 的回答可能被截断, 不得当作完整结论."""
+
+    client = FakeClient(
+        [
+            tool_call_response(submitted_facts().model_dump()),
+            text_response("检查完成, 两条规则均为 not", finish_reason="length"),
+        ]
+    )
+
+    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.kind == "failed"
+
+
+def test_stale_response_fails_after_total_timeout(policy) -> None:
+    """响应返回时总预算已尽: 迟到的回答不得标记成功."""
+
+    class SlowCompletions:
+        def create(self, **kwargs):
+            time.sleep(0.05)
+            return text_response("迟到的结论不可信。")
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SlowCompletions()))
+
+    outcome = run_check(
+        "请检查", submitted=submitted_facts(), policy=policy, client=client, total_timeout=0.01
+    )
+
+    assert outcome.kind == "failed"
+    assert "时限" in outcome.text
+
+
+def test_events_carry_raw_arguments(policy) -> None:
+    """每个工具事件必须带模型原始参数字符串, 含被拒绝的调用."""
+
+    client = FakeClient(
+        [
+            tool_call_response("{ bad args"),
+            tool_call_response(submitted_facts().model_dump(), call_id="call_test_2"),
+            text_response("复核完成。"),
+        ]
+    )
+
+    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.tool_events[0]["arguments"] == "{ bad args"
+    assert "category_required_documents_complete" in outcome.tool_events[1]["arguments"]
+
+
+def test_outcome_carries_context_for_log(policy) -> None:
+    """运行产出携带用户请求, 提交快照与规则版本供记录器使用."""
+
+    client = FakeClient(
+        [
+            tool_call_response(submitted_facts().model_dump()),
+            text_response("完成。"),
+        ]
+    )
+
+    outcome = run_check(
+        "请检查这家供应商的材料", submitted=submitted_facts(), policy=policy, client=client
+    )
+
+    assert outcome.user_request == "请检查这家供应商的材料"
+    assert outcome.submitted_facts["category_required_documents_complete"] is True
+    assert outcome.policy_version == "1.0.0"
+
+
+def test_run_log_includes_request_context(policy, tmp_path) -> None:
+    """落盘记录必须足以复现: 请求, 快照与规则版本都要在档."""
+
+    client = FakeClient(
+        [
+            tool_call_response(submitted_facts().model_dump()),
+            text_response("完成。"),
+        ]
+    )
+    outcome = run_check(
+        "请检查这家供应商", submitted=submitted_facts(), policy=policy, client=client
+    )
+
+    path = write_run_log(
+        outcome,
+        model_name="qwen3.7-flash",
+        log_dir=tmp_path,
+        started_at=datetime(2026, 9, 10, 8, 0, 0),
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["user_request"] == "请检查这家供应商"
+    assert payload["submitted_facts"]["business_license_document_status"] == "valid"
+    assert payload["policy_version"] == "1.0.0"

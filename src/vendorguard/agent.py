@@ -37,6 +37,9 @@ SYSTEM_PROMPT = (
     "必须调用 check_materials 工具, 参数从用户提交的事实原样取值, 不得改写. "
     "信息不足时可以直接追问并结束本次检查. "
     "回答时忠实转述工具结果: 规则未命中不等于准入批准, 不得自行宣布通过准入."
+    "工具调用被拒绝是你的参数错误, 不是用户材料的问题, 必须改正参数重试, "
+    "不得把调用失败归因于提交材料. "
+    "你只能转述工具返回的处置建议, 不得声称人工审核或审批流程已被实际执行."
 )
 
 CHECK_MATERIALS_TOOL: ChatCompletionFunctionToolParam = {
@@ -71,16 +74,13 @@ CHECK_MATERIALS_TOOL: ChatCompletionFunctionToolParam = {
     },
 }
 
-# 启发式: 未执行过工具却说出这些词, 视为"声称已检查". 刻意保守, 只拦明显越界.
-_CHECK_CLAIM_TOKENS = ("not_hit", "未命中", "已检查", "检查完成", "工具结果")
-
 
 class AgentRunOutcome(BaseModel):
-    """一次运行的最终产出, E 阶段的本地运行记录直接基于它. """
-    
+    """一次运行的最终产出, E 阶段的本地运行记录直接基于它."""
+
     model_config = ConfigDict(extra="forbid")
-    
-    kind: Literal["answer", "failed"]
+
+    kind: Literal["answer", "question", "failed"]
     text: str
     model_requests: int
     tool_attempts: int
@@ -88,18 +88,15 @@ class AgentRunOutcome(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     tool_events: list[dict[str, Any]]
+    user_request: str = ""
+    policy_version: str = ""
+    submitted_facts: dict[str, Any] = {}
 
 
 def _redact_secret(text: str) -> str:
     """把 sk- 样式的密钥串整体打码, 防止异常消息夹带 key 入档."""
-    
+
     return re.sub(r"sk-[A-Za-z0-9]{8,}", "sk-***", text)
-
-
-def _claims_checked(text: str) -> bool:
-    """判断一段无工具调用的回答是否在声称已执行检查."""
-    
-    return any(token in text for token in _CHECK_CLAIM_TOKENS)
 
 
 def run_check(
@@ -119,7 +116,7 @@ def run_check(
     追问与检查说明都返回 kind=answer; 预算耗尽, 超时, 网络失败和
     纠正用尽返回 kind=failed, 不吞错继续跑.
     """
-    
+
     started = time.monotonic()
     facts_json = json.dumps(submitted.model_dump(), ensure_ascii=False)
     messages: list[ChatCompletionMessageParam] = [
@@ -135,8 +132,8 @@ def run_check(
     prompt_tokens = 0
     completion_tokens = 0
     tool_events: list[dict[str, Any]] = []
-    
-    def finish(kind: Literal["answer", "failed"], text: str) -> AgentRunOutcome:
+
+    def finish(kind: Literal["answer", "question", "failed"], text: str) -> AgentRunOutcome:
         return AgentRunOutcome(
             kind=kind,
             text=text,
@@ -146,6 +143,9 @@ def run_check(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             tool_events=list(tool_events),
+            user_request=user_request,
+            policy_version=policy.version,
+            submitted_facts=submitted.model_dump(),
         )
 
     while True:
@@ -166,11 +166,11 @@ def run_check(
             )
         except Exception as exc:
             return finish("failed", f"模型请求失败: {exc}")
-        
+
         if completion.usage is not None:
             prompt_tokens += completion.usage.prompt_tokens
             completion_tokens += completion.usage.completion_tokens
-        
+
         message = completion.choices[0].message
         # assistant 的 tool_calls 必须原样回写历史, 调用 ID 对应是协议要求;
         # SDK 的 dump 结果与 assistant 消息协议一致, cast 仅向类型系统声明这一点.
@@ -178,26 +178,35 @@ def run_check(
             cast(ChatCompletionAssistantMessageParam, message.model_dump(exclude_none=True))
         )
         calls = message.tool_calls or []
-        
+
         if not calls:
             text = (message.content or "").strip()
-            if not executed_ok and _claims_checked(text):
-                if corrections_used >= 1:
-                    return finish("failed", "未成功校验就声称已检查, 且纠正机会已用尽")
-                corrections_used += 1
-                messages.append(
-                    ChatCompletionUserMessageParam(
-                        role="user",
-                        content=(
-                            "请实际调用 check_materials 工具, 根据工具结果回答, "
-                            "不要凭推断下结论."
-                        ),
-                    )
+            if completion.choices[0].finish_reason != "stop":
+                return finish("failed", f"回答被截断或过滤: {completion.choices[0].finish_reason}")
+            if time.monotonic() - started >= total_timeout:
+                return finish("failed", f"响应返回时总时限 {total_timeout} 秒已用尽")
+            if not text:
+                return finish("failed", "模型返回空回答")
+            if executed_ok:
+                return finish("answer", text)
+            # 无工具背书时唯一合法出口是追问(问句); 其余一律视为待纠正的结论
+            if "?" in text or "\uff1f" in text:
+                return finish("question", text)
+            if corrections_used >= 1:
+                return finish("failed", "未调用工具就给出结论, 且纠正机会已用尽")
+            corrections_used += 1
+            messages.append(
+                ChatCompletionUserMessageParam(
+                    role="user",
+                    content=(
+                        "必须实际调用 check_materials 工具并基于工具结果给出检查结论; "
+                        "若信息不足, 请以问句形式向用户追问."
+                    ),
                 )
-                continue
-            return finish("answer", text) # 追问或检查说明都走这里
-        
-        for call in calls:  #一次返回多个调用也逐个检查预算, 非法调用同样计数
+            )
+            continue
+
+        for call in calls:  # 一次返回多个调用也逐个检查预算, 非法调用同样计数
             if tool_attempts >= max_tool_attempts:
                 return finish("failed", f"工具调用尝试达到上限 {max_tool_attempts} 次")
             tool_attempts += 1
@@ -224,12 +233,22 @@ def run_check(
                         "name": f"<type:{call.type}>",
                         "status": "error",
                         "detail": f"不支持的工具调用类型: {call.type}",
+                        "arguments": None,
                     }
                 )
                 continue
 
             if call.function.name != "check_materials":
                 if corrections_used >= 1:
+                    tool_events.append(
+                        {
+                            "tool_call_id": call.id,
+                            "name": call.function.name,
+                            "status": "error",
+                            "detail": f"纠正机会已用尽, 再次返回未知工具: {call.function.name}",
+                            "arguments": call.function.arguments,
+                        }
+                    )
                     return finish(
                         "failed", f"纠正机会已用尽, 再次返回未知工具: {call.function.name}"
                     )
@@ -248,16 +267,26 @@ def run_check(
                         "tool_call_id": call.id,
                         "name": call.function.name,
                         "status": "error",
-                        "detail": f"未知工具: {call.function.name}",
+                        "detail": f"纠正机会已用尽, 再次返回未知工具: {call.function.name}",
+                        "arguments": call.function.arguments,
                     }
                 )
                 continue
-            
+
             try:
                 facts = parse_tool_arguments(call.function.arguments)
                 result = check_materials(facts, policy=policy, submitted=submitted)
             except ToolArgumentError as exc:
                 if corrections_used >= 1:
+                    tool_events.append(
+                        {
+                            "tool_call_id": call.id,
+                            "name": call.function.name,
+                            "status": "error",
+                            "detail": f"纠正机会已用尽, 参数仍然非法: {exc}",
+                            "arguments": call.function.arguments,
+                        }
+                    )
                     return finish("failed", f"纠正机会已用尽, 参数仍然非法: {exc}")
                 corrections_used += 1
                 messages.append(
@@ -273,6 +302,7 @@ def run_check(
                         "name": call.function.name,
                         "status": "error",
                         "detail": str(exc),
+                        "arguments": call.function.arguments,
                     }
                 )
                 continue
@@ -291,6 +321,7 @@ def run_check(
                     "name": "check_materials",
                     "status": "ok",
                     "detail": result.model_dump(),
+                    "arguments": call.function.arguments,
                 }
             )
 
@@ -328,9 +359,7 @@ def load_llm_settings(env: Mapping[str, str | None]) -> LlmSettings:
     missing = [name for name in _REQUIRED_ENV if not env.get(name)]
     if missing:
         raise AgentConfigError("缺少模型配置: " + ", ".join(missing) + ", 请写入本地 .env")
-    return LlmSettings(
-        **{field: str(env[name]) for name, field in _REQUIRED_ENV.items()}
-    )
+    return LlmSettings(**{field: str(env[name]) for name, field in _REQUIRED_ENV.items()})
 
 
 def load_submitted_facts(path: Path) -> StructuredFacts:
@@ -360,11 +389,14 @@ def write_run_log(
     用量; 不写 API Key 或请求头, 对 sk- 样式密钥做兜底打码.
     started_at 由调用方显式传入, 保证文件名可测且同一秒不覆盖.
     """
-    
+
     log_dir.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "started_at": started_at.isoformat(timespec="seconds"),
         "model": model_name,
+        "user_request": outcome.user_request,
+        "policy_version": outcome.policy_version,
+        "submitted_facts": outcome.submitted_facts,
         "simulated_input": simulated,
         "kind": outcome.kind,
         "text": outcome.text,
@@ -402,12 +434,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(prog="vendorguard.agent", description="M1 材料审查 agent")
     parser.add_argument("facts_file", type=Path, help="结构化事实样例 JSON 路径(模拟输入)")
-    parser.add_argument(
-        "request", nargs="?", default="请检查这家供应商的材料是否满足准入要求."
-    )
+    parser.add_argument("request", nargs="?", default="请检查这家供应商的材料是否满足准入要求.")
     args = parser.parse_args(argv)
     started_at = datetime.now()
-    
+
     try:
         settings = load_llm_settings({**dotenv_values(".env"), **os.environ})
         facts = load_submitted_facts(args.facts_file)
@@ -415,7 +445,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except AgentConfigError as exc:
         print(f"启动失败: {exc}")
         return 2
-    
+
     client = OpenAI(
         api_key=settings.api_key,
         base_url=settings.base_url,
@@ -437,7 +467,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         started_at=started_at,
     )
     print(f"运行记录: {log_path}")
-    return 0 if outcome.kind == "answer" else 1
+    return 0 if outcome.kind in ("answer", "question") else 1
 
 
 if __name__ == "__main__":
