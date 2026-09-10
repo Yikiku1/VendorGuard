@@ -1,6 +1,6 @@
 # VendorGuard 当前上下文
 
-> 更新：2026-09-08。用户已要求按 AI Agent / AI 应用开发求职定位简化项目。
+> 更新：2026-09-10。M1 已完成，下一里程碑 M2；项目定位为 AI Agent / AI 应用开发求职。
 > 本次调整了定位、范围和计划；下述 Agent 产品能力仍待实现。
 
 ## 当前定位与入口
@@ -42,10 +42,8 @@ VendorGuard 是供应商材料审查 Agent：用户提交材料，Agent 调用�
 
 ## 当前下一步
 
-当前仅进入新计划 M1：一个命令行 Agent 根据结构化示例调用材料校验工具，并根据工具结果回答或追问。
+2026-09-10：M1 已完成。命令行 Agent（`python -m vendorguard.agent <事实样例> [请求]`）在 qwen3.7-flash 自动工具选择下跑通正常/缺项/未知三案例，回答忠实、记录入 `logs/agent-runs/`；详见 [M1 实施方案](project_docs/VendorGuard-M1实施方案.md)步骤表与[开发计划](project_docs/VendorGuard-Agent开发计划.md)里程碑。
 
-2026-09-08 已完成 [M1 实施方案](project_docs/VendorGuard-M1实施方案.md) 与占位文件清理，尚未实现 Agent。方案准备时，现有规则 Schema、事实和执行器的 22 项单元测试通过；正常案例纯函数探针返回两条 `not_hit`，未加载数据库模块。旧补件 YAML 的顶层完整性字段不会被当前加载器读取，M1 使用明确构造的事实变体，不直接套用旧补件案例。
+下一里程碑为 M2：从一种自制文本 PDF 提取事实，缺字段时追问并接受补充。已知事实供 M2 衔接：原生 DashScope SDK 入口在本账号报 url error，Agent 走 OpenAI 兼容协议与 `openai` SDK（实测记录在 M1 方案第 5 节）；真实追问已实证一次（超范围问题下 kind=question），M2 需验证的是“追问后接受补充并继续”的会话闭环；工具参数与提交快照的对账仍是安全边界，M2 接入解析结果后不得绕过；结论必须有工具背书（评审修正，不得回退）。
 
-先确认实际模型接口支持 tool calling，再通过对应官方 SDK 接入。复用 `evaluate_rule()` 等纯函数；不要让模型调用会修改案件状态的 `evaluate_admission_case()` 或审批端点。M1 的模拟输入与真实模型调用要分别标注。
-
-M1 完成后再做一种真实材料输入和基础 RAG。新的里程碑进度仅在 [Agent 开发计划](project_docs/VendorGuard-Agent开发计划.md) 更新，避免再维护多套看板。
+里程碑进度仅在 [Agent 开发计划](project_docs/VendorGuard-Agent开发计划.md) 更新，避免再维护多套看板。
