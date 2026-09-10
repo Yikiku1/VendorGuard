@@ -42,8 +42,8 @@ VendorGuard 是供应商材料审查 Agent：用户提交材料，Agent 调用�
 
 ## 当前下一步
 
-2026-09-10：M1 已完成。命令行 Agent（`python -m vendorguard.agent <事实样例> [请求]`）在 qwen3.7-flash 自动工具选择下跑通正常/缺项/未知三案例，回答忠实、记录入 `logs/agent-runs/`；详见 [M1 实施方案](project_docs/VendorGuard-M1实施方案.md)步骤表与[开发计划](project_docs/VendorGuard-Agent开发计划.md)里程碑。
+2026-09-10：M1 已完成（经两轮外部评审修正闭环）。命令行 Agent（`python -m vendorguard.agent <事实样例> [请求]`）在 qwen3.7-flash 自动工具选择下跑通正常/缺件/未知/超范围四场景：前三者通过（未知案例为“校验后经 ask_user 切题追问”），超范围交付率场景三次运行均未达成切题追问（全为安全失败、伪造被拦截），记为已知限制；详见 [M1 实施方案](project_docs/VendorGuard-M1实施方案.md)与[开发计划](project_docs/VendorGuard-Agent开发计划.md)的评审修正记录。
 
-下一里程碑为 M2：从一种自制文本 PDF 提取事实，缺字段时追问并接受补充。已知事实供 M2 衔接：原生 DashScope SDK 入口在本账号报 url error，Agent 走 OpenAI 兼容协议与 `openai` SDK（实测记录在 M1 方案第 5 节）；真实追问已实证一次（超范围问题下 kind=question），M2 需验证的是“追问后接受补充并继续”的会话闭环；工具参数与提交快照的对账仍是安全边界，M2 接入解析结果后不得绕过；结论必须有工具背书（评审修正，不得回退）。
+下一里程碑为 M2：从一种自制文本 PDF 提取事实，缺字段时追问并接受补充。已知事实供 M2 衔接：原生 DashScope SDK 入口在本账号报 url error，Agent 走 OpenAI 兼容协议与 `openai` SDK（实测记录在 M1 方案第 5 节）；追问为显式工具 `ask_user`（交互控制，不计业务工具总数），已在未知场景真实实证，超范围场景记为高方差已知限制、随 M2 会话制消解；`ask_user` 只能证明选择了追问、不能证明问题文本无夹带，忠实性约束不得放松；工具参数与提交快照的对账仍是安全边界，M2 接入解析结果后不得绕过；结论必须有工具背书（评审修正，不得回退）。
 
 里程碑进度仅在 [Agent 开发计划](project_docs/VendorGuard-Agent开发计划.md) 更新，避免再维护多套看板。

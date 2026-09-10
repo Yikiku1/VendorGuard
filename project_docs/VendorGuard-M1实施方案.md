@@ -1,7 +1,7 @@
 # M1：第一个可以解释的工具调用 Agent
 
 > 日期：2026-09-08。本文是 M1 实施说明。
-> 进度：步骤 A-E 于 2026-09-10 完成并通过外部评审修正闭环，M1 收官；下一里程碑见 [开发计划](VendorGuard-Agent开发计划.md)。
+> 进度：步骤 A-E 于 2026-09-10 完成并通过两轮外部评审修正闭环，M1 收官（超范围追问场景记为已知限制，见开发计划 M1 节）；下一里程碑见 [开发计划](VendorGuard-Agent开发计划.md)。
 > 当前进度只在 [开发计划](VendorGuard-Agent开发计划.md) 维护；产品范围见 [PRD](VendorGuard-PRD.md)。
 
 ## 1. 文件清理决定
@@ -172,6 +172,6 @@ uv run --no-sync python -c $probe
 
 预期：`VEN-001: not_hit`、`VEN-002: not_hit`。下一次只把这段业务逻辑包装成 `check_materials()` 并验证几个输入，不同时开始模型、PDF、RAG 和页面。
 
-C 按上述百炼官方服务、`qwen3.7-flash`、OpenAI 兼容协议与 `openai` SDK 方案开始（实测记录见第 5 节）；不要在聊天里发送 API Key。模型配置届时沿用 `.env`，拟新增 `VENDORGUARD_LLM_MODEL`、`VENDORGUARD_LLM_API_KEY` 与 `VENDORGUARD_LLM_BASE_URL`，端点填控制台提供的 DashScope 地址。只在 Agent 启动入口检查必需项，避免旧后端因缺少模型配置而不能启动。
+C 按上述百炼官方服务、`qwen3.7-flash`、OpenAI 兼容协议与 `openai` SDK 方案开始（实测记录见第 5 节）；不要在聊天里发送 API Key。模型配置已落地 `.env`：`VENDORGUARD_LLM_MODEL`、`VENDORGUARD_LLM_API_KEY` 与 `VENDORGUARD_LLM_BASE_URL`（模板见 `.env.example`），只在 Agent 启动入口检查必需项，旧后端不因缺少模型配置而不能启动。
 
-M1 结束时才提供正式 Agent 启动命令；计划入口为 `python -m vendorguard.agent`，当前文件不存在，不应现在运行。M2 接入 `read_material`，M3 接入 `search_policy`，M4 把同一个运行函数放到页面后端使用，不重新复制一个 Agent。
+正式启动命令：`uv run --no-sync python -m vendorguard.agent <事实样例> [请求]`，样例在 `data/demo/agent/`。运行记录（含密钥打码）写入 `logs/agent-runs/`。M2 接入 `read_material`，M3 接入 `search_policy`，M4 把同一个运行函数放到页面后端使用，不重新复制一个 Agent。追问为交互控制工具 `ask_user`，不计入 M1-M3 业务工具总数。
