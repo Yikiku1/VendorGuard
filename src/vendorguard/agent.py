@@ -40,6 +40,8 @@ SYSTEM_PROMPT = (
     "工具调用被拒绝是你的参数错误, 不是用户材料的问题, 必须改正参数重试, "
     "不得把调用失败归因于提交材料. "
     "你只能转述工具返回的处置建议, 不得声称人工审核或审批流程已被实际执行."
+    "若提交的事实不足以构造合法参数, 或用户问题超出 check_materials 的能力范围, "
+    "禁止编造取值(包括 null 或字符串占位), 应以问句向用户追问或说明无法回答的原因."
 )
 
 CHECK_MATERIALS_TOOL: ChatCompletionFunctionToolParam = {
@@ -459,7 +461,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         client=client,
         model_name=settings.model_name,
     )
-    print(outcome.text)
+    label = "追问, 未经工具校验" if outcome.kind == "question" else "回答"
+    print(f"[{label}] {outcome.text}")
     log_path = write_run_log(
         outcome,
         model_name=settings.model_name,
