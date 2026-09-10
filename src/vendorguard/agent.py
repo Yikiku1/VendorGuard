@@ -40,6 +40,8 @@ SYSTEM_PROMPT = (
     "追问中不得宣告批准, 已完成审批或检查结论. "
     "若用户问题超出材料准入检查范围(如交付率), 只能说明当前仅支持材料准入检查, "
     "不得暗示补充材料即可评估其他指标. "
+    "用 ask_user 追问超范围问题时, 须先说明该指标无法评估, "
+    "再询问是否需要材料检查, 不得直接索要材料. "
     "回答时忠实转述工具结果: 规则未命中不等于准入批准, 不得自行宣布通过准入."
 )
 
@@ -83,6 +85,7 @@ ASK_USER_TOOL: ChatCompletionFunctionToolParam = {
         "description": (
             "向用户提出一个补充信息的问题并结束本次运行. "
             "仅当所需信息不在提交事实与工具结果中时使用. "
+            '参数必须是 {"question": "问题文本"} 形式的 JSON 对象. '
             "问题必须是单一问句, 不得包含批准或检查结论."
         ),
         "parameters": {
@@ -106,7 +109,10 @@ def _parse_ask_user_arguments(raw_json: str) -> str:
         raise ToolArgumentError(f"追问参数不是合法 JSON: {exc}") from exc
     question = raw.get("question") if isinstance(raw, dict) else None
     if not isinstance(question, str) or not question.strip():
-        raise ToolArgumentError("追问参数缺少非空的 question 字段")
+        raise ToolArgumentError(
+            'ask_user 参数必须是 {"question": "问题文本"} 形式的 JSON 对象, '
+            "question 非空且不能把问题写在其他字段或正文里"
+        )
     return question
 
 
@@ -163,6 +169,7 @@ def run_check(
     model_requests = 0
     tool_attempts = 0
     corrections_used = 0
+    ask_correction_used = False
     executed_ok = False
     prompt_tokens = 0
     completion_tokens = 0
@@ -231,8 +238,28 @@ def run_check(
                 return finish("answer", text)
             # 评审修复 #1: 问号不再是合法出口, 纯文本一律待纠正
             if corrections_used >= 1:
+                tool_events.append(
+                    {
+                        "tool_call_id": "<text>",
+                        "name": "<text-correction>",
+                        "status": "error",
+                        "detail": "纠正机会已用尽, 模型仍返回纯文本结论",
+                        "assistant_content": text[:200],
+                        "arguments": None,
+                    }
+                )
                 return finish("failed", "未调用工具就给出结论, 且纠正机会已用尽")
             corrections_used += 1
+            tool_events.append(
+                {
+                    "tool_call_id": "<text>",
+                    "name": "<text-correction>",
+                    "status": "error",
+                    "detail": "纯文本不能作为结论或追问出口",
+                    "assistant_content": text[:200],
+                    "arguments": None,
+                }
+            )
             messages.append(
                 ChatCompletionUserMessageParam(
                     role="user",
@@ -349,18 +376,19 @@ def run_check(
                 try:
                     question = _parse_ask_user_arguments(call.function.arguments)
                 except ToolArgumentError as exc:
-                    if corrections_used >= 1:
+                    if ask_correction_used:
                         tool_events.append(
                             {
                                 "tool_call_id": call.id,
                                 "name": "ask_user",
                                 "status": "error",
-                                "detail": f"纠正机会已用尽, 追问参数非法: {exc}",
+                                "detail": f"追问参数非法, 专属纠正机会已用尽: {exc}",
+                                "assistant_content": (message.content or "")[:200],
                                 "arguments": call.function.arguments,
                             }
                         )
-                        return finish("failed", f"纠正机会已用尽, 追问参数非法: {exc}")
-                    corrections_used += 1
+                        return finish("failed", f"追问参数非法, 专属纠正机会已用尽: {exc}")
+                    ask_correction_used = True
                     messages.append(
                         ChatCompletionToolMessageParam(
                             role="tool",
@@ -374,6 +402,7 @@ def run_check(
                             "name": "ask_user",
                             "status": "error",
                             "detail": str(exc),
+                            "assistant_content": (message.content or "")[:200],
                             "arguments": call.function.arguments,
                         }
                     )
@@ -400,6 +429,7 @@ def run_check(
                             "name": call.function.name,
                             "status": "error",
                             "detail": f"纠正机会已用尽, 参数仍然非法: {exc}",
+                            "assistant_content": (message.content or "")[:200],
                             "arguments": call.function.arguments,
                         }
                     )

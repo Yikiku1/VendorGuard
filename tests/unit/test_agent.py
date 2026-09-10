@@ -726,6 +726,29 @@ def test_ask_user_empty_question_uses_correction_budget(policy) -> None:
 
     assert outcome.kind == "question"
     assert [event["status"] for event in outcome.tool_events] == ["error", "ok"]
+    # ask_user 参数错误时必须留下同轮正文, 否则无法区分"没想问"与"问在content里"
+    assert outcome.tool_events[0]["assistant_content"] == ""
+
+
+def test_ask_param_correction_is_bucketed_from_text_correction(policy) -> None:
+    """真实日志复盘入测: 文本纠正与 ask_user 参数错误分属两桶, 不得互相残杀."""
+
+    client = FakeClient(
+        [
+            text_response("请问需要检查哪家供应商?"),
+            ask_user_response("", call_id="call_ask_bad"),
+            ask_user_response("贵司名称是什么?", call_id="call_ask_ok"),
+        ]
+    )
+
+    outcome = run_check("帮我看看", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.kind == "question"
+    assert outcome.model_requests == 3
+    text_event, ask_event, ok_event = outcome.tool_events
+    assert text_event["name"] == "<text-correction>"
+    assert "请问需要检查哪家供应商?" in text_event["assistant_content"]
+    assert [ask_event["status"], ok_event["status"]] == ["error", "ok"]
 
 
 def test_multiple_calls_in_one_response_rejected(policy) -> None:
