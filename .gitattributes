@@ -2,3 +2,7 @@
 /data/knowledge/snapshots/** -text -whitespace
 /data/knowledge/normalized/** -text -whitespace
 /data/knowledge/sources/*.html -text -whitespace
+
+# 样例 PDF 是二进制. 其内部含裸 LF 且无 NUL 字节, git 会误判为文本;
+# 若在 autocrlf=true 下检出, LF 被改写为 CRLF 会破坏 xref 偏移导致 PDF 无法解析.
+/data/demo/**/*.pdf -text -whitespace

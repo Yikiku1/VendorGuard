@@ -35,6 +35,13 @@ desktop.ini
 
 .qoder/
 
+# 本地工具状态(如安全扫描), 不属于项目内容
+.mimosa/
+
+# 个人简历目录含真实手机号与邮箱, 且本仓库公开: 整个目录不入库.
+# resume/ 内另有 .gitignore 作为第二层防护, 两层都保留.
+resume/
+
 # Local RAG work tracking
 /project_docs/VendorGuard-RAG重构待办.md
 project_docs/VendorGuard-对话式待办卡片工具调研.md

@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 from pytest import MonkeyPatch
@@ -77,8 +79,8 @@ def test_load_settings_reads_jwt_configuration(monkeypatch: MonkeyPatch) -> None
 def test_load_settings_reads_demo_account_passwords(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    specialist_password = "specialist-demo-password"
-    manager_password = "manager-demo-password"
+    specialist_password = f"demo-specialist-{uuid4().hex}"
+    manager_password = f"demo-manager-{uuid4().hex}"
 
     monkeypatch.setenv(
         "VENDORGUARD_DEMO_SPECIALIST_PASSWORD",

@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from openai.types.chat import (
@@ -136,11 +137,28 @@ def test_normal_round_trip_returns_answer(policy) -> None:
     assert outcome.kind == "answer"
     assert "not_hit" in outcome.text
     second_messages = client.completions.calls[1]["messages"]
-    assert [m["role"] for m in second_messages] == ["system", "user", "assistant", "tool"]
+    assert [m["role"] for m in second_messages] == ["system", "user", "assistant", "tool", "user"]
     tool_message = second_messages[3]
     assert tool_message["tool_call_id"] == "call_test_1"
     payload = json.loads(tool_message["content"])
     assert [e["result"] for e in payload["evaluations"]] == ["not_hit", "not_hit"]
+
+
+def test_tool_result_is_followed_by_read_only_reminder(policy) -> None:
+    """工具给出建议后, 下一次模型请求必须明确本次运行没有写入案件状态."""
+
+    client = FakeClient(
+        [
+            tool_call_response(submitted_facts().model_dump()),
+            text_response("两条规则均为 not_hit。"),
+        ]
+    )
+
+    run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+
+    reminder = client.completions.calls[1]["messages"][-1]
+    assert reminder["role"] == "user"
+    assert "没有写入案件状态" in reminder["content"]
 
 
 def test_bad_json_gets_structured_error_and_correction(policy) -> None:
@@ -462,9 +480,11 @@ def test_write_run_log_redacts_api_key_style_secrets(tmp_path) -> None:
 # --- E1-c: 启动入口配置与事实加载 -------------------------------------------------
 
 
+# 运行时生成测试密钥, 使源码中不出现凭据形状的字面量; 前缀仅用于断言报错不外泄密钥.
+TEST_API_KEY = f"sk-{uuid4().hex}"
 FULL_ENV = {
     "VENDORGUARD_LLM_MODEL": "qwen3.7-flash",
-    "VENDORGUARD_LLM_API_KEY": "sk-test-not-real",
+    "VENDORGUARD_LLM_API_KEY": TEST_API_KEY,
     "VENDORGUARD_LLM_BASE_URL": "https://example.test/compatible-mode/v1",
 }
 
@@ -496,7 +516,7 @@ def test_load_llm_settings_returns_values_when_complete() -> None:
     settings = load_llm_settings(FULL_ENV)
 
     assert settings.model_name == "qwen3.7-flash"
-    assert settings.api_key == "sk-test-not-real"
+    assert settings.api_key == TEST_API_KEY
     assert settings.base_url == "https://example.test/compatible-mode/v1"
 
 
@@ -712,6 +732,18 @@ def test_ask_user_recorded_and_ends_run(policy) -> None:
     assert event["detail"]["question"] == "请问要检查哪家供应商?"
 
 
+def test_model_request_exposes_check_and_question_tools(policy) -> None:
+    """真实模型请求必须同时声明校验与追问工具, 否则模型无法选择追问出口."""
+
+    client = FakeClient([ask_user_response("请补充缺失材料的来源定位.")])
+
+    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+
+    assert outcome.kind == "question"
+    tool_names = [tool["function"]["name"] for tool in client.completions.calls[0]["tools"]]
+    assert tool_names == ["check_materials", "ask_user"]
+
+
 def test_ask_user_empty_question_uses_correction_budget(policy) -> None:
     """question 为空属参数错误: 走共享纠正预算, 改正后正常结束."""
 
@@ -799,6 +831,32 @@ def test_ask_user_after_check_keeps_verified_result(policy) -> None:
     assert [e["result"] for e in outcome.tool_events[0]["detail"]["evaluations"]] == [
         "not_hit",
         "not_hit",
+    ]
+
+
+def test_missing_facts_require_ask_user_after_check(policy) -> None:
+    """校验发现缺失事实后, 带追问的纯文本必须纠正为 ask_user 调用."""
+
+    submitted = StructuredFacts(
+        business_license_document_status="valid",
+        sources={"business_license_document_status": "BL-001@page_1"},
+    )
+    client = FakeClient(
+        [
+            tool_call_response(submitted.model_dump(exclude_none=True)),
+            text_response("当前无法判断材料是否齐全。请问品类必填材料是否齐全?"),
+            ask_user_response("请问品类必填材料是否齐全?", call_id="call_ask_ok"),
+        ]
+    )
+
+    outcome = run_check("请检查", submitted=submitted, policy=policy, client=client)
+
+    assert outcome.kind == "question"
+    assert outcome.model_requests == 3
+    assert [event["name"] for event in outcome.tool_events] == [
+        "check_materials",
+        "<text-correction>",
+        "ask_user",
     ]
 
 

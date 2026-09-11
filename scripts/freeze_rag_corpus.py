@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 import yaml
@@ -25,6 +26,17 @@ SNAPSHOT_DIR = KNOWLEDGE_DIR / "snapshots"
 CORPUS_MANIFEST_PATH = KNOWLEDGE_DIR / "manifests" / "corpus_v1.json"
 
 SourceOrigin = Literal["synthetic", "gov_document"]
+
+# 允许下载原始响应的官方域名. 新增来源需同时在此登记, 使下载目标始终可复核.
+OFFICIAL_SOURCE_HOSTS = frozenset(
+    {
+        "www.mee.gov.cn",
+        "www.gov.cn",
+        "xzfg.moj.gov.cn",
+        "isccc.gov.cn",
+        "www.cnipa.gov.cn",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -297,6 +309,21 @@ def _load_existing_source(
     }
 
 
+def _validated_source_url(canonical_url: str) -> str:
+    """校验来源 URL 只能是白名单内的官方 https 地址。
+
+    语料来源均为政府公开网站, 收紧到固定域名可避免该脚本被改造成
+    访问任意外部或内网地址的通道。
+    """
+
+    parsed = urlparse(canonical_url)
+    if parsed.scheme != "https":
+        raise ValueError(f"来源 URL 必须使用 https: {canonical_url}")
+    if parsed.hostname not in OFFICIAL_SOURCE_HOSTS:
+        raise ValueError(f"来源 URL 不在官方域名白名单内: {canonical_url}")
+    return canonical_url
+
+
 def _download_source(spec: EditionSpec) -> tuple[bytes, dict[str, object]]:
     """下载缺失的官方原始响应, 不对正文做清洗或转码。"""
 
@@ -304,7 +331,7 @@ def _download_source(spec: EditionSpec) -> tuple[bytes, dict[str, object]]:
         raise ValueError(f"{spec.edition_key} 缺少官方来源 URL")
 
     request = Request(
-        spec.canonical_url,
+        _validated_source_url(spec.canonical_url),
         headers={"User-Agent": "VendorGuard-RAG-Corpus/1.0"},
     )
     with urlopen(request, timeout=60) as response:

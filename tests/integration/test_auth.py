@@ -50,7 +50,7 @@ def test_login_rejects_wrong_password_without_token() -> None:
             "/auth/login",
             json={
                 "username": "demo.specialist",
-                "password": "definitely-wrong-password",
+                "password": f"wrong-{uuid4().hex}",
             },
         )
 
@@ -67,8 +67,8 @@ def test_login_does_not_reveal_unknown_username() -> None:
         response = client.post(
             "/auth/login",
             json={
-                "username": "definitely-not-a-user",
-                "password": "irrelevant-password",
+                "username": f"unknown-{uuid4().hex}",
+                "password": f"irrelevant-{uuid4().hex}",
             },
         )
 

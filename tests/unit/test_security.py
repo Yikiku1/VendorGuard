@@ -24,6 +24,12 @@ from vendorguard.security import (
 )
 
 
+def _demo_password(label: str) -> str:
+    """运行时生成测试口令, 使源码中不出现凭据形状的字面量。"""
+
+    return f"demo-{label}-{uuid4().hex}"
+
+
 def test_user_roles_match_mvp_contract() -> None:
     assert {role.value for role in UserRole} == {
         "procurement_specialist",
@@ -78,14 +84,14 @@ def test_user_model_uses_stable_roles_and_database_defaults() -> None:
 
 
 def test_password_hash_uses_argon2_and_verifies_plaintext() -> None:
-    password = "local-demo-password"
+    password = _demo_password("local")
 
     password_hash = hash_password(password)
 
     assert password_hash != password
     assert password_hash.startswith("$argon2")
     assert verify_password(password, password_hash) is True
-    assert verify_password("wrong-password", password_hash) is False
+    assert verify_password(_demo_password("wrong"), password_hash) is False
 
 
 def test_access_token_round_trip_contains_identity_and_expiry() -> None:
@@ -156,8 +162,8 @@ def test_create_access_token_requires_jwt_secret() -> None:
 
 
 async def test_seed_demo_users_creates_only_mvp_accounts() -> None:
-    specialist_password = "specialist-demo-password"
-    manager_password = "manager-demo-password"
+    specialist_password = _demo_password("specialist")
+    manager_password = _demo_password("manager")
     settings = Settings(
         demo_specialist_password=SecretStr(specialist_password),
         demo_manager_password=SecretStr(manager_password),
@@ -191,7 +197,7 @@ async def test_seed_demo_users_creates_only_mvp_accounts() -> None:
 
 async def test_seed_demo_users_requires_manager_password() -> None:
     settings = Settings(
-        demo_specialist_password=SecretStr("specialist-demo-password"),
+        demo_specialist_password=SecretStr(_demo_password("specialist")),
         demo_manager_password=None,
     )
 
@@ -212,8 +218,8 @@ async def test_seed_demo_users_requires_manager_password() -> None:
 
 async def test_seed_demo_users_skips_existing_accounts() -> None:
     settings = Settings(
-        demo_specialist_password=SecretStr("specialist-demo-password"),
-        demo_manager_password=SecretStr("manager-demo-password"),
+        demo_specialist_password=SecretStr(_demo_password("specialist")),
+        demo_manager_password=SecretStr(_demo_password("manager")),
     )
 
     session = AsyncMock(spec=AsyncSession)
@@ -231,7 +237,7 @@ async def test_seed_demo_users_skips_existing_accounts() -> None:
 
 
 async def test_authenticate_user_accepts_valid_credentials() -> None:
-    password = "valid-demo-password"
+    password = _demo_password("valid")
     user = User(
         id=uuid4(),
         username="demo.specialist",
@@ -257,7 +263,7 @@ async def test_authenticate_user_rejects_wrong_password() -> None:
     user = User(
         id=uuid4(),
         username="demo.specialist",
-        password_hash=hash_password("correct-password"),
+        password_hash=hash_password(_demo_password("correct")),
         role=UserRole.PROCUREMENT_SPECIALIST,
         is_active=True,
     )
@@ -268,7 +274,7 @@ async def test_authenticate_user_rejects_wrong_password() -> None:
     authenticated_user = await authenticate_user(
         session,
         username="demo.specialist",
-        password="wrong-password",
+        password=_demo_password("wrong"),
     )
 
     assert authenticated_user is None
@@ -276,7 +282,7 @@ async def test_authenticate_user_rejects_wrong_password() -> None:
 
 
 async def test_authenticate_user_rejects_inactive_user() -> None:
-    password = "correct-password"
+    password = _demo_password("correct")
     user = User(
         id=uuid4(),
         username="demo.specialist",

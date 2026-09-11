@@ -1,4 +1,4 @@
-"""M1 的 Agent 循环: 单工具, 有限预算, 允许追问.
+"""M1 的 Agent 循环: 一个业务校验工具、一个追问控制工具与有限预算.
 
 本文件只负责模型接线与循环控制; 工具行为在 agent_tools,
 规则语义在 policy. client 参数接受真实 openai 客户端,
@@ -154,8 +154,8 @@ def run_check(
 ) -> AgentRunOutcome:
     """驱动一次有预算的工具调用循环, 返回回答或明确失败.
 
-    追问与检查说明都返回 kind=answer; 预算耗尽, 超时, 网络失败和
-    纠正用尽返回 kind=failed, 不吞错继续跑.
+    检查说明返回 kind=answer, ask_user 追问返回 kind=question;
+    预算耗尽、超时、网络失败和纠正用尽返回 kind=failed.
     """
 
     started = time.monotonic()
@@ -171,6 +171,7 @@ def run_check(
     corrections_used = 0
     ask_correction_used = False
     executed_ok = False
+    question_required = False
     prompt_tokens = 0
     completion_tokens = 0
     tool_events: list[dict[str, Any]] = []
@@ -202,7 +203,7 @@ def run_check(
             completion = client.chat.completions.create(
                 model=model_name,
                 messages=messages,
-                tools=[CHECK_MATERIALS_TOOL],
+                tools=[CHECK_MATERIALS_TOOL, ASK_USER_TOOL],
                 timeout=min(request_timeout, max(remaining, 0.001)),
                 extra_body={"enable_thinking": False},
             )
@@ -234,28 +235,40 @@ def run_check(
                 return finish("failed", f"回答被截断或过滤: {completion.choices[0].finish_reason}")
             if not text:
                 return finish("failed", "模型返回空回答")
-            if executed_ok:
+            if executed_ok and not question_required:
                 return finish("answer", text)
-            # 评审修复 #1: 问号不再是合法出口, 纯文本一律待纠正
+            if question_required:
+                correction_detail = "校验结果仍有缺失事实, 追问必须调用 ask_user"
+                exhausted_text = "校验结果仍有缺失事实, 且模型未调用 ask_user"
+                correction_message = (
+                    "校验结果包含 missing_fields; 必须调用 ask_user 提出一个补充信息问题."
+                )
+            else:
+                correction_detail = "纯文本不能作为结论或追问出口"
+                exhausted_text = "未调用工具就给出结论, 且纠正机会已用尽"
+                correction_message = (
+                    "检查结论必须来自 check_materials 工具结果; "
+                    "若需要向用户提问, 请调用 ask_user 工具."
+                )
             if corrections_used >= 1:
                 tool_events.append(
                     {
                         "tool_call_id": "<text>",
                         "name": "<text-correction>",
                         "status": "error",
-                        "detail": "纠正机会已用尽, 模型仍返回纯文本结论",
+                        "detail": f"纠正机会已用尽: {correction_detail}",
                         "assistant_content": text[:200],
                         "arguments": None,
                     }
                 )
-                return finish("failed", "未调用工具就给出结论, 且纠正机会已用尽")
+                return finish("failed", exhausted_text)
             corrections_used += 1
             tool_events.append(
                 {
                     "tool_call_id": "<text>",
                     "name": "<text-correction>",
                     "status": "error",
-                    "detail": "纯文本不能作为结论或追问出口",
+                    "detail": correction_detail,
                     "assistant_content": text[:200],
                     "arguments": None,
                 }
@@ -263,10 +276,7 @@ def run_check(
             messages.append(
                 ChatCompletionUserMessageParam(
                     role="user",
-                    content=(
-                        "检查结论必须来自 check_materials 工具结果; "
-                        "若需要向用户提问, 请调用 ask_user 工具."
-                    ),
+                    content=correction_message,
                 )
             )
             continue
@@ -466,11 +476,22 @@ def run_check(
                 return finish("failed", f"工具内部错误: {exc}")
 
             executed_ok = True
+            question_required = bool(result.missing_fields)
             messages.append(
                 ChatCompletionToolMessageParam(
                     role="tool",
                     tool_call_id=call.id,
                     content=result.model_dump_json(),
+                )
+            )
+            messages.append(
+                ChatCompletionUserMessageParam(
+                    role="user",
+                    content=(
+                        "本次工具仅执行只读规则检查, 没有写入案件状态. "
+                        "outcome 中的 action 与 target_case_status 只是建议动作; "
+                        "只能描述为建议, 不得声称系统已经执行、标记或改变案件状态."
+                    ),
                 )
             )
             tool_events.append(
