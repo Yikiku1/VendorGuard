@@ -62,8 +62,8 @@ async def _make_draft_case(
     assert specialist is not None
 
     supplier = Supplier(
-        display_name="Day5 契约流程供应商",
-        declared_registration_id=f"DAY5-{uuid4()}",
+        display_name="契约流程演示供应商",
+        declared_registration_id=f"DEMO-{uuid4()}",
         category_code="standard_components",
     )
     session.add(supplier)
@@ -117,7 +117,7 @@ async def test_normal_admission_yaml_drives_case_to_analyzing(
     """正常准入案例事实由 YAML 加载, 评估后停在 analyzing 且不产生任何规则命中。"""
 
     facts = load_demo_case_facts(NORMAL_CASE_PATH)
-    # Day 5 判定 1: 事实能定位到 fixture 声明的模拟来源。
+    # 事实必须能定位到 fixture 声明的模拟来源。
     assert facts.sources["business_license_document_status"] == "doc-demo-normal-license@page:1"
 
     admission_case, specialist = await _make_draft_case(session)

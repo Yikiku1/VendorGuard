@@ -297,7 +297,7 @@ def test_rejects_unknown_authority(tmp_path: Path) -> None:
 def test_rejects_government_document_without_provenance(tmp_path: Path) -> None:
     """声明为公开公文却没有出处与抓取日期, 等于无法追溯, 必须拒绝.
 
-    这条是"简历项目里的语料必须可核查"的机器化表达: 面试官问出处时不能靠回忆回答。
+    语料出处必须可核查, 不能靠回忆回答引用来源。
     """
 
     with pytest.raises(KnowledgeLoadError):

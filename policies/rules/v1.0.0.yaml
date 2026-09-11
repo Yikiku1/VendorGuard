@@ -9,7 +9,7 @@ description: VendorGuard 一期教学演示规则。阈值不代表任何真实�
 source_document: project_docs/VendorGuard-规则测试表.md
 
 implementation_scope:
-  status: scoped_for_10_day_mvp
+  status: scoped_for_initial_release
   enabled_rule_ids:
   - VEN-001
   - VEN-002

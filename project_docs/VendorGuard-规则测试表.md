@@ -1,6 +1,6 @@
 # VendorGuard 规则测试表
 
-> 文档类型：Day 1 规则输入与边界基线  
+> 文档类型：规则输入与边界基线  
 > 文档状态：领域规则已确认，实施范围已精简  
 > 确认日期：2026-08-27  
 > 适用范围：`VEN-001` 至 `VEN-006`、`PR-001`  
@@ -49,7 +49,7 @@
 | `supplier_is_in_avl` | 布尔 | `true`、`false` | 由资格状态、资格有效期和生效中的暂停决定共同生成的 AVL 查询投影 | `PR-001` 的直接输入 |
 | `supplier_eligibility_status` | 枚举 | `candidate`、`approved`、`suspended`、`expired`、`rejected` | 创建采购例外时保存的资格快照 | `PR-001` 的审计解释，不单独作为放行判断 |
 
-`delivery_history_is_sufficient` 的最小样本数量将在 Day 5 解析与计算设计中配置。本规则只消费已经计算好的布尔事实，当前不提前写死样本数量。
+`delivery_history_is_sufficient` 的最小样本数量在后续解析与计算设计中配置。本规则只消费已经计算好的布尔事实，当前不提前写死样本数量。
 
 ## 4. 规则摘要
 

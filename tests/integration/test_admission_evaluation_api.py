@@ -316,7 +316,7 @@ def test_evaluation_rolls_back_when_audit_append_fails(
 
     patch 目标为 vendorguard.admission.append_audit_event: evaluate_admission_case
     通过 from vendorguard.audit import 把名字绑定进 admission 命名空间, patch 源模块
-    无效。这是 Day 4 decision 回滚测试同款陷阱。
+    无效。这是决策回滚测试同款陷阱。
     """
 
     monkeypatch.setattr(

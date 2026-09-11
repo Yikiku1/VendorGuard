@@ -455,7 +455,7 @@ async def evaluate_admission_case(
 
     案件须处于 draft 或 pending_documents 才能发起评估; 先移到 analyzing,
     若任一命中动作是 request_documents 再移到 pending_documents, 否则停在
-    analyzing。Day 5 边界下不推进到 pending_approval (依赖 Day 6 证据审校),
+    analyzing。当前边界下不推进到 pending_approval (依赖证据审校),
     也不改供应商资格。analyzing 只能经此编排进入, 与手动 /transition 分道,
     人工跳步仍被既有测试拒为 409。
     """

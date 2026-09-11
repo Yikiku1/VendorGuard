@@ -1,6 +1,6 @@
 """断言正式库所在的迁移版本就是迁移目录的 head.
 
-这条测试存在的直接起因是 Day 6 第 1 步的一次故障: alembic upgrade head 打印了
+这条测试存在的直接起因是一次真实故障: alembic upgrade head 打印了
 Running upgrade 并以退出码 0 结束, 但 alembic_version 里的值纹丝不动. 成功日志与
 退出码都无法发现这种故障, 因为 Alembic 只管执行迁移体, 不校验事务最终有没有提交.
 把"库必须处于 head"固化成断言之后, 这类静默失败会在下一次跑测试时立刻变红.

@@ -1,6 +1,7 @@
 # VendorGuard
 
-供应商材料审查 Agent，面向 AI Agent / AI 应用开发学习与求职演示。
+供应商材料审查 Agent：提交材料后，Agent 读取原文、提取事实、执行确定性规则，
+缺信息时追问并在补充后继续，检索现行制度依据，输出带来源的初审报告。
 
 **目标体验：提交一份材料 PDF，Agent 读取原文、提取事实、执行确定性规则，缺信息时追问并在用户补充后继续，检索现行制度依据，输出带来源的初审报告。**
 
@@ -59,5 +60,5 @@ python scripts/make_demo_materials.py   # 重新生成样例 PDF
 
 样例材料为**自制教学材料，非真实证照**，不对应任何真实企业。
 
-文档入口：[当前上下文](PROJECT_CONTEXT.md)、[开发计划](project_docs/VendorGuard-Agent开发计划.md)、
-[完整方案](project_docs/VendorGuard-M3M4完整方案.md)、[PRD](project_docs/VendorGuard-PRD.md)。
+文档入口：[项目上下文](PROJECT_CONTEXT.md)、[产品范围](project_docs/VendorGuard-PRD.md)、
+[状态数据字典](project_docs/VendorGuard-状态数据字典.md)、[规则测试表](project_docs/VendorGuard-规则测试表.md)。

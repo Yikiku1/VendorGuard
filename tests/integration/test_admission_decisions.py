@@ -50,7 +50,7 @@ async def pending_approval_case_id(existing_supplier_id: UUID) -> AsyncIterator[
     """直接创建处于 pending_approval 的案件用于测试审批端点。
 
     跳过 draft → pending_documents → ... 的完整链路: 案件如何进入 pending_approval
-    是 Day 5 编排层的职责, 本轮测试只关心审批端点本身, 所以用 fixture 直接构造前置状态。
+    是评估编排层的职责, 本轮测试只关心审批端点本身, 所以用 fixture 直接构造前置状态。
     """
 
     engine = create_database_engine(load_settings())

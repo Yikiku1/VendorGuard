@@ -62,7 +62,7 @@ def test_case_contract_reference_targets_exist() -> None:
     normal_admission.yaml 指向 demo_supplier_admission_policy_v2 的 normal_admission 章节,
     supplement_review.yaml 指向 demo_supplier_quote_policy_v1 的 quote_deviation_review 章节。
     引用必须落在现行版本上: 检索按案例 reference_date 做生效期硬过滤, 落在已废止版本上的
-    期望在数学上永远召不回。少任何一个目标, Day 7 兑现 evidence_reviewing 时就无据可引。
+    期望在数学上永远召不回。少任何一个目标, 证据审校环节就无据可引。
     """
 
     catalog = _catalog()

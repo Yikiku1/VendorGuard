@@ -117,9 +117,9 @@ class RuleDefinition(PolicyModel):
 
 
 class ImplementationScope(PolicyModel):
-    """描述规则在当前十天 MVP 中的启用与延期范围。"""
+    """描述规则在当前交付范围内的启用与延期情况。"""
 
-    status: Literal["scoped_for_10_day_mvp"]
+    status: Literal["scoped_for_initial_release"]
     enabled_rule_ids: list[str]
     deferred_rule_ids: list[str]
     notes: list[str]
