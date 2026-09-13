@@ -42,12 +42,14 @@ desktop.ini
 # resume/ 内另有 .gitignore 作为第二层防护, 两层都保留.
 resume/
 
-# Local RAG work tracking
+# Local work tracking: 进行中的过程文档不入公开仓库
 /project_docs/VendorGuard-RAG重构待办.md
 project_docs/VendorGuard-对话式待办卡片工具调研.md
 project_docs/VendorGuard-RAG检索栈交接.md
 project_docs/VendorGuard-RAG重构资料调研.md
 project_docs/VendorGuard-RAG语料候选与来源核验.md
+/project_docs/VendorGuard-M2完整方案.md
+/project_docs/VendorGuard-从M1到现在.md
 # Agent instructions and rules
 AGENTS.md
 CLAUDE.md
