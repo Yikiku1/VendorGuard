@@ -2,3 +2,5 @@
 /data/knowledge/snapshots/** -text -whitespace
 /data/knowledge/normalized/** -text -whitespace
 /data/knowledge/sources/*.html -text -whitespace
+# 演示样例 PDF 内部按字节偏移定位, 换行转换会直接损坏文件. 按二进制冻结.
+/data/demo/materials/** -text -whitespace
