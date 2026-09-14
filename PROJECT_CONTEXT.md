@@ -25,9 +25,9 @@ VendorGuard 是供应商材料审查 Agent：用户提交材料，Agent 调用�
 | 知识资料与评测 | 已有冻结语料、归一化正文和 `data/evals/rag_phase1.json` |
 | 结构节点解析 | `evidence/node_parser.py` 与对应测试已存在；旧交接中“尚未实现”的描述已过时 |
 | RAG 持久化 | `evidence/models.py`、迁移 `b0604f36e9a4` 已存在，包含四层实体和版本关联表；本轮开始时两者尚未提交，`alembic/env.py` 也有已有改动 |
-| Agent M1 | `agent.py` 与 `agent_tools.py` 已实现真实模型工具循环；`check_materials` 和 `ask_user` 可运行，带预算、错误纠正和脱敏记录 |
-| Agent M2 材料输入 | `materials.py` 已实现文本 PDF 逐页读取（失败码 `file_not_found`、`not_a_pdf`、`scanned_pdf_unsupported`、`empty_material`）与来源核对 `MaterialSources`；`agent_tools.py` 新增提取事实管线 `parse_extracted_facts` / `check_extracted_facts`，在规则执行前核对来源并派生执照状态。三份自制样例在 `data/demo/materials/`，生成脚本 `scripts/make_demo_materials.py` |
-| 后续产品链路 | 真实 PDF 输入尚未接入 `agent.py`，跨轮补充、制度检索、带引用报告和前端尚未实现 |
+| Agent M1 | `agent.py` 与 `agent_tools.py` 已实现真实模型工具循环；预算、错误纠正和脱敏记录机制仍在使用，M1 的快照事实入口（`parse_tool_arguments` / `check_materials`）已删除 |
+| Agent M2 材料输入 | `materials.py` 逐页读取文本 PDF（失败码 `file_not_found`、`not_a_pdf`、`scanned_pdf_unsupported`、`empty_material`）并提供来源核对 `MaterialSources`；`agent_tools.py` 的提取事实管线在规则执行前核对来源、由程序派生执照状态；`agent.py` 的循环先 `read_material` 再 `check_materials`；`agent_session.py` 持有材料与用户补充，支持一次补充闭环。三份自制样例与生成脚本在 `data/demo/materials/`、`scripts/make_demo_materials.py` |
+| 后续产品链路 | 制度检索、带引用报告和前端尚未实现；跨轮对话只支持一次补充，未做长期会话管理 |
 
 当前案件评估中的正常路径仍停在 `analyzing`，补件路径可到 `pending_documents`；已有人工决定接口不等于端到端审批已跑通。Agent 初审报告不依赖推进这些业务状态，也不能把报告确认写成供应商准入批准。
 
@@ -45,8 +45,10 @@ VendorGuard 是供应商材料审查 Agent：用户提交材料，Agent 调用�
 
 2026-09-10：M1 已完成（经两轮外部评审修正闭环）。命令行 Agent（`python -m vendorguard.agent <事实样例> [请求]`）在 qwen3.7-flash 自动工具选择下跑通正常/缺件/未知/超范围四场景：前三者通过（未知案例为“校验后经 ask_user 切题追问”），超范围交付率场景三次运行均未达成切题追问（全为安全失败、伪造被拦截），记为已知限制；详见 [M1 实施方案](project_docs/VendorGuard-M1实施方案.md)与[开发计划](project_docs/VendorGuard-Agent开发计划.md)的评审修正记录。
 
-下一里程碑为 M2：[详细方案](project_docs/VendorGuard-M2实施方案.md)已定义，实现尚未开始；当前唯一小功能是 M2-1 文本 PDF 读取。M2 只增加真实材料读取、来源核对和一次补充闭环，继续使用 `agent.py` 的单一循环，不接 RAG、报告、前端或 LangGraph。已知事实供 M2 衔接：原生 DashScope SDK 入口在本账号报 url error，Agent 走 OpenAI 兼容协议与 `openai` SDK（实测记录在 M1 方案第 5 节）；追问继续使用显式工具 `ask_user`；工具参数与来源核对是规则执行前的安全边界，结论必须有工具背书。
+下一里程碑为 M2：[详细方案](project_docs/VendorGuard-M2实施方案.md)已定义。M2 只增加真实材料读取、来源核对和一次补充闭环，继续使用 `agent.py` 的单一循环，不接 RAG、报告、前端或 LangGraph。已知事实供 M2 衔接：原生 DashScope SDK 入口在本账号报 url error，Agent 走 OpenAI 兼容协议与 `openai` SDK（实测记录在 M1 方案第 5 节）；追问继续使用显式工具 `ask_user`；工具参数与来源核对是规则执行前的安全边界，结论必须有工具背书。
 
-2026-09-13：M2 已进入实现，停在 M2-3 之前。M2-0 基线复核通过（当时 211 项单测与 Ruff/格式/mypy 全绿，工作区无混入源码改动）；M2-1 文本 PDF 读取、M2-2 来源核对与提取事实管线完成，全量单测 241 通过，三份自制样例与生成脚本入库（样例 PDF 已在 `.gitattributes` 按二进制冻结）。**尚未接入循环**：`read_material` 还不在 `agent.py` 里，M1 的快照入口 `parse_tool_arguments` / `check_materials` 与 M2 的提取事实管线暂时并存，这是为保持每步可运行而留的一步过渡，M2-3 把循环切过去时一并删除 M1 那条及其测试。M2 未验收，README 与验收结论未更新。
+2026-09-13：M2 进入实现。M2-0 基线复核通过（当时 211 项单测与 Ruff/格式/mypy 全绿，工作区无混入源码改动）；M2-1 文本 PDF 读取、M2-2 来源核对与提取事实管线完成。为保持每一步可运行，M1 的快照入口与 M2 的提取事实管线一度并存，M2-3 把循环切过去后已删除前者。
+
+2026-09-14：M2 完成（M2-0 至 M2-5）。`agent.py` 保留唯一循环与唯一 CLI，CLI 现在接收材料 PDF 并可传 `--reference-date`；`agent_session.py` 支持一次补充闭环；全量单测 247 通过，Ruff、格式检查与 mypy 全绿（Docker 未启动，集成测试未跑，本轮改动不涉及数据库）。真实模型记录在 `logs/agent-runs/`：完整样例 3 次全过，扫描件在材料层被拒且未发模型请求，缺日期样例 3 次里 1 次走完闭环、2 次为模型波动（耗尽纠正预算后失败、以及补充后仍选择追问），两次都按“模型行为方差、边界未放行”记入开发计划的已知限制。下一步进入 M3（制度检索与报告）。
 
 里程碑进度仅在 [Agent 开发计划](project_docs/VendorGuard-Agent开发计划.md) 更新，避免再维护多套看板。
