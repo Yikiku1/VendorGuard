@@ -1,12 +1,9 @@
-"""测试 check_materials 工具的实际行为与事实边界。
+"""测试提取事实管线: 来源核对, 状态派生与规则执行。
 
-契约由本测试固定: agent_tools 需提供 parse_tool_arguments,
-check_materials, MaterialCheckResult 与 ToolArgumentError。
-解析失败或与快照不一致时一律抛 ToolArgumentError 且不执行任何规则。
-
-M2 的提取事实管线另有一套契约: parse_extracted_facts / check_extracted_facts
-接收模型从材料读出的原始事实, 先核对来源再派生状态; 来源不存在、事实与原文
-不一致或模型想直接提交结论时, 同样抛 ToolArgumentError 且不执行规则。
+契约由本测试固定: agent_tools 只提供 parse_extracted_facts 与
+check_extracted_facts 这一条管线。它接收模型从材料里读出的原始事实, 先核对
+来源再派生状态; 来源不存在、事实与原文不一致或模型想直接提交结论时, 一律抛
+ToolArgumentError 且不执行任何规则。
 """
 
 from __future__ import annotations
@@ -19,19 +16,15 @@ import pytest
 
 from vendorguard import agent_tools
 from vendorguard.agent_tools import (
-    MaterialCheckResult,
+    ExtractedCheckResult,
     ToolArgumentError,
     check_extracted_facts,
-    check_materials,
     parse_extracted_facts,
-    parse_tool_arguments,
 )
 from vendorguard.materials import MaterialSources, read_text_pdf
-from vendorguard.policy import PolicyDocument, RuleEvaluation, StructuredFacts, load_policy
+from vendorguard.policy import PolicyDocument, RuleEvaluation, load_policy
 
 RULES_PATH = Path("policies/rules/v1.0.0.yaml")
-LICENSE_SOURCE = "BL-001@page_1"
-CHECKLIST_SOURCE = "CHECKLIST-001@row_2"
 MATERIALS_DIR = Path(__file__).resolve().parents[2] / "data" / "demo" / "materials"
 # 与 data/demo/cases/*.yaml 的 reference_date 一致, 派生状态以它为基准。
 REFERENCE_DATE = date(2026, 9, 1)
@@ -39,184 +32,15 @@ REFERENCE_DATE = date(2026, 9, 1)
 
 @pytest.fixture(scope="module")
 def policy() -> PolicyDocument:
-    """加载现行规则配置, M1 只启用 VEN-001 与 VEN-002。"""
+    """加载现行规则配置, 本期只启用 VEN-001 与 VEN-002。"""
 
     return load_policy(RULES_PATH)
 
 
-def build_facts(
-    *,
-    license_status: str | None = "valid",
-    docs_complete: bool | None = True,
-    license_source: str | None = LICENSE_SOURCE,
-    checklist_source: str | None = CHECKLIST_SOURCE,
-) -> StructuredFacts:
-    """以正常案例为基线构造事实变体, None 字段连同其来源一并省略。"""
-
-    data: dict[str, object] = {}
-    sources: dict[str, str] = {}
-    if license_status is not None:
-        data["business_license_document_status"] = license_status
-        if license_source is not None:
-            sources["business_license_document_status"] = license_source
-    if docs_complete is not None:
-        data["category_required_documents_complete"] = docs_complete
-        if checklist_source is not None:
-            sources["category_required_documents_complete"] = checklist_source
-    data["sources"] = sources
-    return StructuredFacts(**data)
-
-
-def as_map(result: MaterialCheckResult) -> dict[str, RuleEvaluation]:
+def as_map(result: ExtractedCheckResult) -> dict[str, RuleEvaluation]:
     """按规则 ID 索引执行结果, 方便逐条断言。"""
 
     return {evaluation.rule_id: evaluation for evaluation in result.evaluations}
-
-
-# --- 四种事实输入的规则行为 -------------------------------------------------
-
-
-def test_normal_facts_both_rules_not_hit(policy: PolicyDocument) -> None:
-    """完整且合法的事实两条规则均不命中, not_hit 不等于准入批准。"""
-
-    submitted = build_facts()
-    result = check_materials(submitted, policy=policy, submitted=submitted)
-
-    evaluations = as_map(result)
-    assert evaluations["VEN-001"].result == "not_hit"
-    assert evaluations["VEN-002"].result == "not_hit"
-    assert evaluations["VEN-001"].outcome is None
-    assert evaluations["VEN-002"].outcome is None
-    assert result.policy_version == policy.version
-    assert result.checked_rule_ids == ["VEN-001", "VEN-002"]
-    assert result.missing_fields == []
-    assert result.input_sources == submitted.sources
-
-
-def test_incomplete_documents_hit_request_documents(policy: PolicyDocument) -> None:
-    """已知材料不齐 (false) 时 VEN-002 命中, 处置为补件。"""
-
-    submitted = build_facts(docs_complete=False)
-    result = check_materials(submitted, policy=policy, submitted=submitted)
-
-    evaluations = as_map(result)
-    assert evaluations["VEN-002"].result == "hit"
-    assert evaluations["VEN-002"].outcome is not None
-    assert evaluations["VEN-002"].outcome.action == "request_documents"
-    assert evaluations["VEN-001"].result == "not_hit"
-
-
-def test_unknown_completeness_uses_missing_input_outcome(policy: PolicyDocument) -> None:
-    """完整性未知时字段键必须缺席, 走 on_missing_input 而非 not_hit。"""
-
-    submitted = build_facts(docs_complete=None)
-    result = check_materials(submitted, policy=policy, submitted=submitted)
-
-    ven002 = as_map(result)["VEN-002"]
-    assert ven002.result == "hit"
-    assert ven002.outcome is not None
-    assert ven002.outcome.action == "create_manual_review"
-    assert result.missing_fields == ["category_required_documents_complete"]
-
-
-def test_expired_license_hits_routed_outcome(policy: PolicyDocument) -> None:
-    """营业执照过期时 VEN-001 经路由表命中补件处置。"""
-
-    submitted = build_facts(license_status="expired")
-    result = check_materials(submitted, policy=policy, submitted=submitted)
-
-    ven001 = as_map(result)["VEN-001"]
-    assert ven001.result == "hit"
-    assert ven001.outcome is not None
-    assert ven001.outcome.action == "request_documents"
-    assert ven001.outcome.reason_code == "business_license_expired"
-
-
-# --- 快照一致性边界 -----------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("claimed_complete", "submitted_complete"),
-    [(False, True), (True, False)],
-    ids=["claimed_missing", "claimed_complete"],
-)
-def test_value_mismatch_rejected(
-    policy: PolicyDocument, claimed_complete: bool, submitted_complete: bool
-) -> None:
-    """模型参数与快照的事实值不一致即补造或改写, 拒绝且不执行规则。"""
-
-    submitted = build_facts(docs_complete=submitted_complete)
-    claimed = build_facts(docs_complete=claimed_complete)
-    with pytest.raises(ToolArgumentError, match="category_required_documents_complete"):
-        check_materials(claimed, policy=policy, submitted=submitted)
-
-
-def test_dropped_fact_rejected(policy: PolicyDocument) -> None:
-    """快照已有已知事实而模型漏传该字段时按漏传拒绝。"""
-
-    submitted = build_facts()
-    claimed = build_facts(docs_complete=None)
-    with pytest.raises(ToolArgumentError):
-        check_materials(claimed, policy=policy, submitted=submitted)
-
-
-def test_altered_source_rejected(policy: PolicyDocument) -> None:
-    """事实值相同但来源被改写仍属不一致, 来源必须逐项比对。"""
-
-    submitted = build_facts()
-    claimed = build_facts(checklist_source="CHECKLIST-001@row_9")
-    with pytest.raises(ToolArgumentError):
-        check_materials(claimed, policy=policy, submitted=submitted)
-
-
-# --- JSON 参数解析 ------------------------------------------------------------
-
-
-def test_parse_valid_json_builds_structured_facts() -> None:
-    """合法 JSON 参数解析为 StructuredFacts, 值与来源原样保留。"""
-
-    payload = json.dumps(
-        {
-            "business_license_document_status": "valid",
-            "category_required_documents_complete": True,
-            "sources": {
-                "business_license_document_status": LICENSE_SOURCE,
-                "category_required_documents_complete": CHECKLIST_SOURCE,
-            },
-        }
-    )
-    facts = parse_tool_arguments(payload)
-
-    assert isinstance(facts, StructuredFacts)
-    assert facts.business_license_document_status == "valid"
-    assert facts.category_required_documents_complete is True
-    assert facts.sources == {
-        "business_license_document_status": LICENSE_SOURCE,
-        "category_required_documents_complete": CHECKLIST_SOURCE,
-    }
-
-
-def test_parse_invalid_json_raises_tool_argument_error() -> None:
-    """非 JSON 文本归一为参数错误, 不向外抛 json.JSONDecodeError。"""
-
-    with pytest.raises(ToolArgumentError):
-        parse_tool_arguments("{not json")
-
-
-def test_parse_fact_without_source_raises_tool_argument_error() -> None:
-    """缺来源定位抛 FactsValidationError, 需归一为 ToolArgumentError。"""
-
-    payload = json.dumps({"business_license_document_status": "valid"})
-    with pytest.raises(ToolArgumentError):
-        parse_tool_arguments(payload)
-
-
-def test_parse_unknown_field_raises_tool_argument_error() -> None:
-    """模型补造白名单外字段时 extra=forbid 拦截并归一为参数错误。"""
-
-    payload = json.dumps({"supplier_name": "acme"})
-    with pytest.raises(ToolArgumentError):
-        parse_tool_arguments(payload)
 
 
 # --- 提取事实管线: 来源核对、状态派生与规则执行 -------------------------------
@@ -252,7 +76,7 @@ def extraction_payload(
     return json.dumps(payload, ensure_ascii=False)
 
 
-def run_check(
+def run_pipeline(
     policy: PolicyDocument,
     sources: MaterialSources,
     payload: str,
@@ -272,7 +96,7 @@ def test_complete_material_passes_with_verified_sources(
 ) -> None:
     """完整材料: 两条规则均不命中, 来源逐条核实, 没有缺字段。"""
 
-    result = run_check(policy, sources, extraction_payload())
+    result = run_pipeline(policy, sources, extraction_payload())
 
     evaluations = as_map(result)  # type: ignore[arg-type]
     assert evaluations["VEN-001"].result == "not_hit"
@@ -299,7 +123,7 @@ def test_derived_status_and_rule_follow_reference_date(
 ) -> None:
     """执照状态由程序按参考日期派生: 同一天材料, 换个参考日期结论就相反。"""
 
-    result = run_check(policy, sources, extraction_payload(), reference_date=reference_date)
+    result = run_pipeline(policy, sources, extraction_payload(), reference_date=reference_date)
 
     assert result.derived_business_license_status == expected_status
     ven001 = as_map(result)["VEN-001"]  # type: ignore[arg-type]
@@ -314,7 +138,7 @@ def test_chinese_date_writing_matches_ascii_source(
 ) -> None:
     """模型写 2027年8月31日 也能与材料里的 2027-08-31 对上: 比较归一化年月日。"""
 
-    result = run_check(policy, sources, extraction_payload(valid_until="2027年8月31日"))
+    result = run_pipeline(policy, sources, extraction_payload(valid_until="2027年8月31日"))
 
     assert result.derived_business_license_status == "valid"
 
@@ -325,7 +149,7 @@ def test_fabricated_date_is_rejected_before_rules(
     """模型编一个材料里没有的日期: 来源核对失败, 规则不执行。"""
 
     with pytest.raises(ToolArgumentError, match="business_license_valid_until"):
-        run_check(policy, sources, extraction_payload(valid_until="2030-01-01"))
+        run_pipeline(policy, sources, extraction_payload(valid_until="2030-01-01"))
 
 
 @pytest.mark.parametrize(
@@ -339,7 +163,7 @@ def test_fabricated_source_locator_is_rejected(
     """伪造的页码或材料 ID 都取不到原文: 来源不存在, 规则不执行。"""
 
     with pytest.raises(ToolArgumentError, match="business_license_valid_until"):
-        run_check(policy, sources, extraction_payload(date_source=locator))
+        run_pipeline(policy, sources, extraction_payload(date_source=locator))
 
 
 def test_opposite_checklist_claim_is_rejected(
@@ -348,7 +172,7 @@ def test_opposite_checklist_claim_is_rejected(
     """材料写着"齐全"而模型声明 False: 清单文字不一致, 规则不执行。"""
 
     with pytest.raises(ToolArgumentError, match="category_required_documents_complete"):
-        run_check(policy, sources, extraction_payload(docs_complete=False))
+        run_pipeline(policy, sources, extraction_payload(docs_complete=False))
 
 
 def test_supplement_round_must_be_registered(
@@ -359,10 +183,10 @@ def test_supplement_round_must_be_registered(
     payload = extraction_payload(valid_until="2028-05-20", date_source="user_supplement@round:1")
 
     with pytest.raises(ToolArgumentError, match="business_license_valid_until"):
-        run_check(policy, sources, payload)
+        run_pipeline(policy, sources, payload)
 
     sources.add_supplement(1, "补充说明: 营业执照有效期至 2028年05月20日")
-    result = run_check(policy, sources, payload)
+    result = run_pipeline(policy, sources, payload)
 
     assert result.derived_business_license_status == "valid"
     assert result.verified_sources["business_license_valid_until"] == "user_supplement@round:1"
@@ -373,7 +197,7 @@ def test_missing_date_reports_field_without_deriving_status(
 ) -> None:
     """模型没读到有效期: 不派生状态, 缺字段如实报告, VEN-001 走缺失输入处置。"""
 
-    result = run_check(policy, sources, extraction_payload(valid_until=None))
+    result = run_pipeline(policy, sources, extraction_payload(valid_until=None))
 
     assert result.derived_business_license_status is None
     assert result.missing_fields == ["business_license_valid_until"]
@@ -416,6 +240,43 @@ def test_rules_are_not_evaluated_when_source_check_fails(
     monkeypatch.setattr(agent_tools, "evaluate_rule", lambda rule, **kwargs: calls.append(rule.id))
 
     with pytest.raises(ToolArgumentError):
-        run_check(policy, sources, extraction_payload(valid_until="2030-01-01"))
+        run_pipeline(policy, sources, extraction_payload(valid_until="2030-01-01"))
 
     assert calls == []
+
+
+def test_incomplete_checklist_hits_ven002(policy: PolicyDocument, sources: MaterialSources) -> None:
+    """清单不齐全且有原文支撑时 VEN-002 命中, 处置为补件建议。"""
+
+    sources.add_supplement(1, "补充说明: 材料清单状态: 不齐全, 缺少质量证书")
+    payload = extraction_payload(docs_complete=False, checklist_source="user_supplement@round:1")
+
+    result = run_pipeline(policy, sources, payload)
+
+    ven002 = as_map(result)["VEN-002"]
+    assert ven002.result == "hit"
+    assert ven002.outcome is not None
+    assert ven002.outcome.action == "request_documents"
+    assert ven002.outcome.reason_code == "category_required_documents_missing"
+    assert result.missing_fields == []
+
+
+def test_unknown_completeness_uses_missing_input_outcome(
+    policy: PolicyDocument, sources: MaterialSources
+) -> None:
+    """清单完整性未知时字段键必须缺席, VEN-002 走缺失输入处置而非 not_hit。"""
+
+    result = run_pipeline(policy, sources, extraction_payload(docs_complete=None))
+
+    ven002 = as_map(result)["VEN-002"]
+    assert ven002.result == "hit"
+    assert ven002.outcome is not None
+    assert ven002.outcome.action == "create_manual_review"
+    assert result.missing_fields == ["category_required_documents_complete"]
+
+
+def test_parse_extracted_facts_rejects_bad_json() -> None:
+    """非 JSON 文本归一为参数错误, 不向外抛 json.JSONDecodeError。"""
+
+    with pytest.raises(ToolArgumentError, match="JSON"):
+        parse_extracted_facts("{not json")

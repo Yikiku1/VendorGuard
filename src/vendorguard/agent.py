@@ -1,8 +1,12 @@
-"""M1 的 Agent 循环: 一个业务校验工具、一个追问控制工具与有限预算.
+"""材料审查 Agent 循环: 读取材料, 核对事实与来源, 执行规则并作答.
 
-本文件只负责模型接线与循环控制; 工具行为在 agent_tools,
-规则语义在 policy. client 参数接受真实 openai 客户端,
+本文件只负责模型接线与循环控制; 材料读取在 materials, 事实核对与规则执行
+在 agent_tools, 规则语义在 policy. client 参数接受真实 openai 客户端,
 也接受测试替身, 只要提供 chat.completions.create.
+
+M2 的顺序规则不依赖提示词: 没读材料不能校验, 校验没过不能给结论, 缺字段
+只能追问. 参考日期由程序传入, 模型只提交从材料里读到的原始事实; 会话状态
+(当前材料与用户补充原文)由 agent_session 持有, 追问后的补充登记在同一会话里.
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ import os
 import re
 import time
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -29,13 +33,23 @@ from openai.types.chat import (
 )
 from pydantic import BaseModel, ConfigDict
 
-from .agent_tools import ToolArgumentError, check_materials, parse_tool_arguments
-from .policy import PolicyDocument, StructuredFacts, load_policy
+from .agent_session import ReviewSession
+from .agent_tools import ToolArgumentError, check_extracted_facts, parse_extracted_facts
+from .materials import (
+    MaterialDocument,
+    MaterialReadError,
+    read_text_pdf,
+)
+from .policy import PolicyDocument, load_policy
 
 SYSTEM_PROMPT = (
-    "你是供应商材料审查助手. 检查供应商材料是否满足准入要求时, "
-    "必须调用 check_materials 工具, 参数从用户提交的事实原样取值, 不得改写; "
-    "事实未知时省略字段, 禁止用 null 或猜测值填充. "
+    "你是供应商材料审查助手. 检查材料前必须先调用 read_material 读取本次材料, "
+    "只能使用工具返回的原文, 不得凭记忆或猜测填写事实. "
+    "如果对话里给出了用户补充的原文, 它是一份合法来源, 引用时写成 "
+    "user_supplement@round:N (N 是补充轮次号), 不得把它写成材料页码; "
+    "随后调用 check_materials 提交从材料里读到的事实, "
+    "每项事实必须同时给出 材料ID@page:N 形式的来源页码; 材料里读不到的字段直接省略, "
+    "不得编造, 也不得自行判断执照是否有效——只提交材料上写明的有效期截止日. "
     "需要向用户提问或说明无法回答时, 必须调用 ask_user 工具, 纯文本不能作为追问出口; "
     "追问中不得宣告批准, 已完成审批或检查结论. "
     "若用户问题超出材料准入检查范围(如交付率), 只能说明当前仅支持材料准入检查, "
@@ -45,30 +59,54 @@ SYSTEM_PROMPT = (
     "回答时忠实转述工具结果: 规则未命中不等于准入批准, 不得自行宣布通过准入."
 )
 
+READ_MATERIAL_TOOL: ChatCompletionFunctionToolParam = {
+    "type": "function",
+    "function": {
+        "name": "read_material",
+        "description": (
+            "读取本次审查材料的逐页正文. 参数是本次提交材料的 ID, 只能读取这一份; "
+            "核对来源时必须使用返回结果里的页码."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "material_id": {
+                    "type": "string",
+                    "description": "本次提交材料的 ID, 由程序给出",
+                },
+            },
+            "required": ["material_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 CHECK_MATERIALS_TOOL: ChatCompletionFunctionToolParam = {
     "type": "function",
     "function": {
         "name": "check_materials",
         "description": (
-            "根据用户提交的材料事实执行准入规则检查. "
-            "每项已知事实必须同时在 sources 中给出 文档ID@定位 格式的来源. "
-            "无法确认的字段直接省略, 不得猜测填写."
+            "根据从材料里读到的事实执行准入规则检查. "
+            "每项事实必须同时在 sources 中给出 材料ID@page:N 格式的来源页码. "
+            "无法确认的字段直接省略, 不得猜测填写; 不要提交执照是否有效的结论."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "business_license_document_status": {
+                "business_license_valid_until": {
                     "type": "string",
-                    "enum": ["valid", "expired", "inconsistent", "unreadable"],
-                    "description": "营业执照材料状态, 未知时省略",
+                    "description": (
+                        "材料上写明的营业执照有效期截止日, 例如 2027-08-31 或 2027年8月31日; "
+                        "材料里读不到时省略"
+                    ),
                 },
                 "category_required_documents_complete": {
                     "type": "boolean",
-                    "description": "品类必填材料是否齐全, 未知时省略",
+                    "description": "材料是否明确写明清单齐全, 读不到时省略",
                 },
                 "sources": {
                     "type": "object",
-                    "description": "每个人已知事实的来源定位, 键为字段名",
+                    "description": "每项已读事实的来源定位, 键为字段名, 值为 材料ID@page:N",
                     "additionalProperties": {"type": "string"},
                 },
             },
@@ -77,21 +115,23 @@ CHECK_MATERIALS_TOOL: ChatCompletionFunctionToolParam = {
     },
 }
 
-
 ASK_USER_TOOL: ChatCompletionFunctionToolParam = {
     "type": "function",
     "function": {
         "name": "ask_user",
         "description": (
             "向用户提出一个补充信息的问题并结束本次运行. "
-            "仅当所需信息不在提交事实与工具结果中时使用. "
+            "仅当所需信息不在材料与工具结果中时使用. "
             '参数必须是 {"question": "问题文本"} 形式的 JSON 对象. '
             "问题必须是单一问句, 不得包含批准或检查结论."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "question": {"type": "string", "description": "要展示给用户的问题, 非空"},
+                "question": {
+                    "type": "string",
+                    "description": "要展示给用户的问题, 非空",
+                },
             },
             "required": ["question"],
             "additionalProperties": False,
@@ -116,8 +156,35 @@ def _parse_ask_user_arguments(raw_json: str) -> str:
     return question
 
 
+def _parse_read_material_arguments(raw_json: str) -> str:
+    """解析 read_material 参数, 取出材料 ID, 非法时抛 ToolArgumentError."""
+
+    try:
+        raw = json.loads(raw_json)
+    except (TypeError, ValueError) as exc:
+        raise ToolArgumentError(f"读取材料参数不是合法 JSON: {exc}") from exc
+    material_id = raw.get("material_id") if isinstance(raw, dict) else None
+    if not isinstance(material_id, str) or not material_id.strip():
+        raise ToolArgumentError(
+            'read_material 参数必须是 {"material_id": "材料ID"} 形式的 JSON 对象'
+        )
+    return material_id
+
+
+def _material_payload(material: MaterialDocument) -> dict[str, Any]:
+    """按工具契约渲染材料: 材料 ID、页数与逐页文本, 页码从 1 开始."""
+
+    return {
+        "material_id": material.material_id,
+        "page_count": material.page_count,
+        "pages": [
+            {"page": number, "text": text} for number, text in enumerate(material.pages, start=1)
+        ],
+    }
+
+
 class AgentRunOutcome(BaseModel):
-    """一次运行的最终产出, E 阶段的本地运行记录直接基于它."""
+    """一次运行的最终产出, 本地运行记录直接基于它."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -131,7 +198,10 @@ class AgentRunOutcome(BaseModel):
     tool_events: list[dict[str, Any]]
     user_request: str = ""
     policy_version: str = ""
-    submitted_facts: dict[str, Any] = {}
+    material_id: str = ""
+    material_sha256: str = ""
+    reference_date: str = ""
+    supplement_rounds: int = 0
 
 
 def _redact_secret(text: str) -> str:
@@ -140,38 +210,48 @@ def _redact_secret(text: str) -> str:
     return re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-***", text)
 
 
-def run_check(
+def run_review(
     user_request: str,
     *,
-    submitted: StructuredFacts,
+    session: ReviewSession,
     policy: PolicyDocument,
     client: OpenAI,
+    reference_date: date,
     model_name: str = "qwen3.7-flash",
     max_model_requests: int = 8,
     max_tool_attempts: int = 12,
     request_timeout: float = 30.0,
     total_timeout: float = 120.0,
 ) -> AgentRunOutcome:
-    """驱动一次有预算的工具调用循环, 返回回答或明确失败.
+    """驱动一次有预算的材料审查循环, 返回检查说明或明确失败.
 
-    检查说明返回 kind=answer, ask_user 追问返回 kind=question;
-    预算耗尽、超时、网络失败和纠正用尽返回 kind=failed.
+    状态推进 (M2 方案第 6 节): read_material 成功才算读过材料; 校验成功且
+    没有缺失事实才允许输出检查说明; 有缺失事实时只允许 ask_user 追问.
+    检查说明返回 kind=answer, ask_user 返回 kind=question; 预算耗尽、超时、
+    网络失败和纠正用尽返回 kind=failed.
     """
 
     started = time.monotonic()
-    facts_json = json.dumps(submitted.model_dump(), ensure_ascii=False)
+    material = session.material
+    sources = session.sources()
+    opening_parts = [f"请审查这份材料: {material.source_name} (材料 ID: {material.material_id})."]
+    for round_number, supplement_text in enumerate(session.supplements, start=1):
+        opening_parts.append(
+            f"用户在第 {round_number} 轮追问后补充的原文 "
+            f"(来源定位 user_supplement@round:{round_number}): {supplement_text}"
+        )
+    opening_parts.append(user_request)
     messages: list[ChatCompletionMessageParam] = [
         ChatCompletionSystemMessageParam(role="system", content=SYSTEM_PROMPT),
-        ChatCompletionUserMessageParam(
-            role="user", content=f"本次提交的事实(模拟输入): {facts_json}. {user_request}"
-        ),
+        ChatCompletionUserMessageParam(role="user", content=" ".join(opening_parts)),
     ]
+    read_done = False
+    checked_ok = False
+    needs_followup = False
     model_requests = 0
     tool_attempts = 0
     corrections_used = 0
     ask_correction_used = False
-    executed_ok = False
-    question_required = False
     prompt_tokens = 0
     completion_tokens = 0
     tool_events: list[dict[str, Any]] = []
@@ -188,7 +268,10 @@ def run_check(
             tool_events=list(tool_events),
             user_request=user_request,
             policy_version=policy.version,
-            submitted_facts=submitted.model_dump(),
+            material_id=material.material_id,
+            material_sha256=material.sha256,
+            reference_date=reference_date.isoformat(),
+            supplement_rounds=session.supplement_rounds,
         )
 
     while True:
@@ -203,7 +286,7 @@ def run_check(
             completion = client.chat.completions.create(
                 model=model_name,
                 messages=messages,
-                tools=[CHECK_MATERIALS_TOOL, ASK_USER_TOOL],
+                tools=[READ_MATERIAL_TOOL, CHECK_MATERIALS_TOOL, ASK_USER_TOOL],
                 timeout=min(request_timeout, max(remaining, 0.001)),
                 extra_body={"enable_thinking": False},
             )
@@ -221,7 +304,10 @@ def run_check(
         # assistant 的 tool_calls 必须原样回写历史, 调用 ID 对应是协议要求;
         # SDK 的 dump 结果与 assistant 消息协议一致, cast 仅向类型系统声明这一点.
         messages.append(
-            cast(ChatCompletionAssistantMessageParam, message.model_dump(exclude_none=True))
+            cast(
+                ChatCompletionAssistantMessageParam,
+                message.model_dump(exclude_none=True),
+            )
         )
         calls = message.tool_calls or []
 
@@ -235,9 +321,9 @@ def run_check(
                 return finish("failed", f"回答被截断或过滤: {completion.choices[0].finish_reason}")
             if not text:
                 return finish("failed", "模型返回空回答")
-            if executed_ok and not question_required:
+            if checked_ok:
                 return finish("answer", text)
-            if question_required:
+            if needs_followup:
                 correction_detail = "校验结果仍有缺失事实, 追问必须调用 ask_user"
                 exhausted_text = "校验结果仍有缺失事实, 且模型未调用 ask_user"
                 correction_message = (
@@ -247,7 +333,7 @@ def run_check(
                 correction_detail = "纯文本不能作为结论或追问出口"
                 exhausted_text = "未调用工具就给出结论, 且纠正机会已用尽"
                 correction_message = (
-                    "检查结论必须来自 check_materials 工具结果; "
+                    "检查结论必须来自 check_materials 工具结果, 且校验结果不能有缺失事实; "
                     "若需要向用户提问, 请调用 ask_user 工具."
                 )
             if corrections_used >= 1:
@@ -324,7 +410,8 @@ def run_check(
                 # 非 function 类型的调用一律按未知工具处理, 不执行
                 if corrections_used >= 1:
                     return finish(
-                        "failed", f"纠正机会已用尽, 再次返回不支持的调用类型: {call.type}"
+                        "failed",
+                        f"纠正机会已用尽, 再次返回不支持的调用类型: {call.type}",
                     )
                 corrections_used += 1
                 messages.append(
@@ -332,7 +419,8 @@ def run_check(
                         role="tool",
                         tool_call_id=call.id,
                         content=json.dumps(
-                            {"error": f"不支持的工具调用类型: {call.type}"}, ensure_ascii=False
+                            {"error": f"不支持的工具调用类型: {call.type}"},
+                            ensure_ascii=False,
                         ),
                     )
                 )
@@ -347,7 +435,11 @@ def run_check(
                 )
                 continue
 
-            if call.function.name not in ("check_materials", "ask_user"):
+            if call.function.name not in (
+                "read_material",
+                "check_materials",
+                "ask_user",
+            ):
                 if corrections_used >= 1:
                     tool_events.append(
                         {
@@ -359,7 +451,8 @@ def run_check(
                         }
                     )
                     return finish(
-                        "failed", f"纠正机会已用尽, 再次返回未知工具: {call.function.name}"
+                        "failed",
+                        f"纠正机会已用尽, 再次返回未知工具: {call.function.name}",
                     )
                 corrections_used += 1
                 messages.append(
@@ -367,7 +460,8 @@ def run_check(
                         role="tool",
                         tool_call_id=call.id,
                         content=json.dumps(
-                            {"error": f"未知工具: {call.function.name}"}, ensure_ascii=False
+                            {"error": f"未知工具: {call.function.name}"},
+                            ensure_ascii=False,
                         ),
                     )
                 )
@@ -428,9 +522,101 @@ def run_check(
                 )
                 return finish("question", question)
 
+            if call.function.name == "read_material":
+                try:
+                    requested_id = _parse_read_material_arguments(call.function.arguments)
+                except ToolArgumentError as exc:
+                    if corrections_used >= 1:
+                        tool_events.append(
+                            {
+                                "tool_call_id": call.id,
+                                "name": "read_material",
+                                "status": "error",
+                                "detail": f"纠正机会已用尽, 读取参数仍然非法: {exc}",
+                                "assistant_content": (message.content or "")[:200],
+                                "arguments": call.function.arguments,
+                            }
+                        )
+                        return finish("failed", f"纠正机会已用尽, 读取参数仍然非法: {exc}")
+                    corrections_used += 1
+                    messages.append(
+                        ChatCompletionToolMessageParam(
+                            role="tool",
+                            tool_call_id=call.id,
+                            content=json.dumps({"error": str(exc)}, ensure_ascii=False),
+                        )
+                    )
+                    tool_events.append(
+                        {
+                            "tool_call_id": call.id,
+                            "name": "read_material",
+                            "status": "error",
+                            "detail": str(exc),
+                            "assistant_content": (message.content or "")[:200],
+                            "arguments": call.function.arguments,
+                        }
+                    )
+                    continue
+
+                if requested_id != material.material_id:
+                    # 材料白名单: 只认本次会话登记的那一份, 模型不能读别的文件
+                    detail = (
+                        f"材料 {requested_id} 不属于本次审查, 本次只能读取 {material.material_id}"
+                    )
+                    if corrections_used >= 1:
+                        tool_events.append(
+                            {
+                                "tool_call_id": call.id,
+                                "name": "read_material",
+                                "status": "error",
+                                "detail": f"纠正机会已用尽, 材料 ID 仍然非法: {detail}",
+                                "arguments": call.function.arguments,
+                            }
+                        )
+                        return finish("failed", f"纠正机会已用尽, 材料 ID 仍然非法: {detail}")
+                    corrections_used += 1
+                    messages.append(
+                        ChatCompletionToolMessageParam(
+                            role="tool",
+                            tool_call_id=call.id,
+                            content=json.dumps({"error": detail}, ensure_ascii=False),
+                        )
+                    )
+                    tool_events.append(
+                        {
+                            "tool_call_id": call.id,
+                            "name": "read_material",
+                            "status": "error",
+                            "detail": detail,
+                            "arguments": call.function.arguments,
+                        }
+                    )
+                    continue
+
+                read_done = True
+                tool_events.append(
+                    {
+                        "tool_call_id": call.id,
+                        "name": "read_material",
+                        "status": "ok",
+                        "detail": {
+                            "material_id": material.material_id,
+                            "page_count": material.page_count,
+                        },
+                        "arguments": call.function.arguments,
+                    }
+                )
+                messages.append(
+                    ChatCompletionToolMessageParam(
+                        role="tool",
+                        tool_call_id=call.id,
+                        content=json.dumps(_material_payload(material), ensure_ascii=False),
+                    )
+                )
+                continue
+
             try:
-                facts = parse_tool_arguments(call.function.arguments)
-                result = check_materials(facts, policy=policy, submitted=submitted)
+                facts = parse_extracted_facts(call.function.arguments)
             except ToolArgumentError as exc:
                 if corrections_used >= 1:
                     tool_events.append(
@@ -463,6 +649,79 @@ def run_check(
                 )
                 continue
 
+            if not read_done:
+                # 顺序规则: 事实必须来自材料原文, 所以校验之前必须读过材料
+                detail = "尚未读取本次材料, 必须先调用 read_material 再提交事实"
+                if corrections_used >= 1:
+                    tool_events.append(
+                        {
+                            "tool_call_id": call.id,
+                            "name": "check_materials",
+                            "status": "error",
+                            "detail": f"纠正机会已用尽, 校验之前仍未读取材料: {detail}",
+                            "assistant_content": (message.content or "")[:200],
+                            "arguments": call.function.arguments,
+                        }
+                    )
+                    return finish("failed", f"纠正机会已用尽, 校验之前仍未读取材料: {detail}")
+                corrections_used += 1
+                messages.append(
+                    ChatCompletionToolMessageParam(
+                        role="tool",
+                        tool_call_id=call.id,
+                        content=json.dumps({"error": detail}, ensure_ascii=False),
+                    )
+                )
+                tool_events.append(
+                    {
+                        "tool_call_id": call.id,
+                        "name": "check_materials",
+                        "status": "error",
+                        "detail": detail,
+                        "arguments": call.function.arguments,
+                    }
+                )
+                continue
+
+            try:
+                result = check_extracted_facts(
+                    facts,
+                    sources=sources,
+                    policy=policy,
+                    reference_date=reference_date,
+                )
+            except ToolArgumentError as exc:
+                if corrections_used >= 1:
+                    tool_events.append(
+                        {
+                            "tool_call_id": call.id,
+                            "name": call.function.name,
+                            "status": "error",
+                            "detail": f"纠正机会已用尽, 来源核对仍然失败: {exc}",
+                            "assistant_content": (message.content or "")[:200],
+                            "arguments": call.function.arguments,
+                        }
+                    )
+                    return finish("failed", f"纠正机会已用尽, 来源核对仍然失败: {exc}")
+                corrections_used += 1
+                messages.append(
+                    ChatCompletionToolMessageParam(
+                        role="tool",
+                        tool_call_id=call.id,
+                        content=json.dumps({"error": str(exc)}, ensure_ascii=False),
+                    )
+                )
+                tool_events.append(
+                    {
+                        "tool_call_id": call.id,
+                        "name": call.function.name,
+                        "status": "error",
+                        "detail": str(exc),
+                        "arguments": call.function.arguments,
+                    }
+                )
+                continue
+
             except Exception as exc:
                 tool_events.append(
                     {
@@ -475,8 +734,8 @@ def run_check(
                 )
                 return finish("failed", f"工具内部错误: {exc}")
 
-            executed_ok = True
-            question_required = bool(result.missing_fields)
+            checked_ok = not result.missing_fields
+            needs_followup = bool(result.missing_fields)
             messages.append(
                 ChatCompletionToolMessageParam(
                     role="tool",
@@ -508,7 +767,7 @@ def run_check(
 
 
 class AgentConfigError(ValueError):
-    """Agent 启动入口缺少必需配置或事实样例非法时抛出的错误."""
+    """Agent 启动入口缺少必需配置或材料无法读取时抛出的错误."""
 
 
 class LlmSettings(BaseModel):
@@ -541,17 +800,17 @@ def load_llm_settings(env: Mapping[str, str | None]) -> LlmSettings:
     return LlmSettings(**{field: str(env[name]) for name, field in _REQUIRED_ENV.items()})
 
 
-def load_submitted_facts(path: Path) -> StructuredFacts:
-    """读取事实样例 JSON 并复用工具解析层校验, 错误归一为启动错误."""
+def load_material(path: Path) -> MaterialDocument:
+    """读取命令行给出的材料 PDF, 失败归一为启动错误.
+
+    材料层已经区分文件不存在、不是 PDF、扫描件和空白材料, 这里只把失败码
+    翻译成启动期错误消息, 不改变判定, 也不在启动阶段做模型请求.
+    """
 
     try:
-        raw_text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise AgentConfigError(f"无法读取事实样例文件: {path}") from exc
-    try:
-        return parse_tool_arguments(raw_text)
-    except ToolArgumentError as exc:
-        raise AgentConfigError(f"事实样例文件未通过校验: {exc}") from exc
+        return read_text_pdf(path)
+    except MaterialReadError as exc:
+        raise AgentConfigError(f"材料无法作为文本 PDF 处理: {exc}") from exc
 
 
 def write_run_log(
@@ -564,8 +823,8 @@ def write_run_log(
 ) -> Path:
     """把一次运行落盘为脱敏 JSON, 返回写入的文件路径.
 
-    记录模型标识, 模拟输入标记, 工具事件, 最终文本, 耗时与 token
-    用量; 不写 API Key 或请求头, 对 sk- 样式密钥做兜底打码.
+    记录模型标识, 材料身份 (ID 与哈希), 参考日期, 工具事件, 最终文本,
+    耗时与 token 用量; 不写 API Key 或请求头, 对 sk- 样式密钥做兜底打码.
     started_at 由调用方显式传入, 保证文件名可测且同一秒不覆盖.
     """
 
@@ -575,7 +834,10 @@ def write_run_log(
         "model": model_name,
         "user_request": outcome.user_request,
         "policy_version": outcome.policy_version,
-        "submitted_facts": outcome.submitted_facts,
+        "material_id": outcome.material_id,
+        "material_sha256": outcome.material_sha256,
+        "reference_date": outcome.reference_date,
+        "supplement_rounds": outcome.supplement_rounds,
         "simulated_input": simulated,
         "kind": outcome.kind,
         "text": outcome.text,
@@ -598,28 +860,37 @@ __all__ = [
     "AgentConfigError",
     "AgentRunOutcome",
     "load_llm_settings",
-    "load_submitted_facts",
+    "load_material",
     "main",
-    "run_check",
+    "run_review",
     "write_run_log",
 ]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """命令行入口: python -m vendorguard.agent <事实样例文件> [请求文本].
+    """命令行入口: python -m vendorguard.agent <材料PDF> [请求文本].
 
-    返回码: 0 正常回答或追问, 1 运行失败, 2 启动配置错误.
+    --reference-date 决定执照状态怎么派生, 缺省用今天; 演示固定样例时可以
+    显式传 2026-09-01 与案例 YAML 的 reference_date 对齐。
+    返回码: 0 正常回答或追问, 1 运行失败, 2 启动配置错误。
     """
 
-    parser = argparse.ArgumentParser(prog="vendorguard.agent", description="M1 材料审查 agent")
-    parser.add_argument("facts_file", type=Path, help="结构化事实样例 JSON 路径(模拟输入)")
+    parser = argparse.ArgumentParser(prog="vendorguard.agent", description="材料审查 agent")
+    parser.add_argument("material_file", type=Path, help="待审查的文本 PDF 材料路径")
     parser.add_argument("request", nargs="?", default="请检查这家供应商的材料是否满足准入要求.")
+    parser.add_argument(
+        "--reference-date",
+        type=date.fromisoformat,
+        default=None,
+        help="派生执照状态用的参考日期 (YYYY-MM-DD), 缺省用今天",
+    )
     args = parser.parse_args(argv)
     started_at = datetime.now()
+    reference_date = args.reference_date or date.today()
 
     try:
         settings = load_llm_settings({**dotenv_values(".env"), **os.environ})
-        facts = load_submitted_facts(args.facts_file)
+        material = load_material(args.material_file)
         policy = load_policy(Path("policies/rules/v1.0.0.yaml"))
     except AgentConfigError as exc:
         print(f"启动失败: {exc}")
@@ -631,15 +902,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         timeout=30.0,
         max_retries=0,
     )
-    outcome = run_check(
+    session = ReviewSession.start(material)
+    outcome = run_review(
         args.request,
-        submitted=facts,
+        session=session,
         policy=policy,
         client=client,
         model_name=settings.model_name,
+        reference_date=reference_date,
     )
     labels = {"answer": "检查说明", "question": "追问", "failed": "运行失败"}
     print(f"[{labels[outcome.kind]}] {outcome.text}")
+    if outcome.kind == "question":
+        # M2 只接受一次补充: 回答登记为来源后, 在同一会话里重新读取与校验
+        answer = input("请补充(直接回车放弃): ").strip()
+        if answer:
+            round_number = session.record_supplement(answer)
+            print(f"[已登记第 {round_number} 轮用户补充]")
+            outcome = run_review(
+                args.request,
+                session=session,
+                policy=policy,
+                client=client,
+                model_name=settings.model_name,
+                reference_date=reference_date,
+            )
+            print(f"[{labels[outcome.kind]}] {outcome.text}")
     for event in outcome.tool_events:
         if event["name"] == "check_materials" and event["status"] == "ok":
             raw = json.dumps(event["detail"], ensure_ascii=False)

@@ -1,14 +1,16 @@
-"""用响应替身验证 agent 循环的分支, 预算与错误处理.
+"""用响应替身验证材料审查循环的分支, 顺序规则, 预算与错误处理.
 
-替身使用 openai 官方消息类型构造, 保证循环代码对消息
-序列化的使用与真实 SDK 一致。
+替身使用 openai 官方消息类型构造, 保证循环代码对消息序列化的使用与真实
+SDK 一致。M2 的契约变化: 循环接收一份已登记材料, 模型必须先调用
+read_material 读材料, 再调用 check_materials 提交"从材料读到的事实 + 来源
+页码"; 未读材料就 check、来源核对失败、缺字段后直接给结论都会被拒绝。
 """
 
 from __future__ import annotations
 
 import json
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -27,13 +29,21 @@ from vendorguard.agent import (
     AgentConfigError,
     AgentRunOutcome,
     load_llm_settings,
-    load_submitted_facts,
-    run_check,
+    load_material,
+    run_review,
     write_run_log,
 )
-from vendorguard.policy import StructuredFacts, load_policy
+from vendorguard.agent_session import ReviewSession
+from vendorguard.materials import MaterialDocument
+from vendorguard.policy import load_policy
 
 RULES_PATH = Path("policies/rules/v1.0.0.yaml")
+MATERIALS_DIR = Path(__file__).resolve().parents[2] / "data" / "demo" / "materials"
+# 与 data/demo/cases/*.yaml 的 reference_date 一致; 用来把声明有效期派生成状态。
+REFERENCE_DATE = date(2026, 9, 1)
+
+# 材料正文按固定样例的内容构造, 所以循环测试不需要读真实 PDF。
+MATERIAL_PAGE_TEXT = "营业执照(演示样例, 非真实证照)\n声明有效期至: 2027-08-31\n材料清单状态: 齐全"
 
 
 @pytest.fixture(scope="module")
@@ -43,17 +53,49 @@ def policy():
     return load_policy(RULES_PATH)
 
 
-def submitted_facts() -> StructuredFacts:
-    """构造与工具测试一致的正常事实."""
+def material(material_id: str = "license_complete") -> MaterialDocument:
+    """构造一份单页文本材料, 与固定样例 license_complete.pdf 内容同形."""
 
-    return StructuredFacts(
-        business_license_document_status="valid",
-        category_required_documents_complete=True,
-        sources={
-            "business_license_document_status": "BL-001@page_1",
-            "category_required_documents_complete": "CHECKLIST-001@row_2",
-        },
+    return MaterialDocument(
+        material_id=material_id,
+        source_name=f"{material_id}.pdf",
+        sha256="0" * 64,
+        page_count=1,
+        pages=(MATERIAL_PAGE_TEXT,),
     )
+
+
+def read_response(
+    material_id: str = "license_complete", call_id: str = "call_read_1"
+) -> ChatCompletion:
+    """剧本: 模型调用 read_material 读取本次材料."""
+
+    return tool_call_response({"material_id": material_id}, call_id=call_id, name="read_material")
+
+
+def check_arguments(
+    *,
+    valid_until: str | None = "2027-08-31",
+    docs_complete: bool | None = True,
+    date_source: str = "license_complete@page:1",
+    checklist_source: str = "license_complete@page:1",
+) -> dict:
+    """构造 check_materials 参数: 从材料读到的事实 + 来源定位.
+
+    传 None 表示该事实没读到, 连同来源一起省略; 两个来源分开给, 因为
+    日期可能来自用户补充而清单来自材料页。
+    """
+
+    payload: dict = {}
+    sources: dict = {}
+    if valid_until is not None:
+        payload["business_license_valid_until"] = valid_until
+        sources["business_license_valid_until"] = date_source
+    if docs_complete is not None:
+        payload["category_required_documents_complete"] = docs_complete
+        sources["category_required_documents_complete"] = checklist_source
+    payload["sources"] = sources
+    return payload
 
 
 def tool_call_response(
@@ -121,27 +163,228 @@ class FakeClient:
 
 
 def test_normal_round_trip_returns_answer(policy) -> None:
-    """正常往返: 模型调用工具, 程序执行, 模型基于结果回答."""
+    """正常往返: 读材料 -> 校验 -> 模型基于工具结果作答."""
 
     client = FakeClient(
         [
-            tool_call_response(submitted_facts().model_dump()),
+            read_response(),
+            tool_call_response(check_arguments()),
             text_response("本次检查两条规则均为 not_hit, 未命中不代表准入批准."),
         ]
     )
 
-    outcome = run_check(
-        "请检查这家供应商的材料", submitted=submitted_facts(), policy=policy, client=client
+    outcome = run_review(
+        "请检查这家供应商的材料",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
     )
 
     assert outcome.kind == "answer"
     assert "not_hit" in outcome.text
-    second_messages = client.completions.calls[1]["messages"]
-    assert [m["role"] for m in second_messages] == ["system", "user", "assistant", "tool", "user"]
-    tool_message = second_messages[3]
-    assert tool_message["tool_call_id"] == "call_test_1"
-    payload = json.loads(tool_message["content"])
-    assert [e["result"] for e in payload["evaluations"]] == ["not_hit", "not_hit"]
+    read_messages = client.completions.calls[1]["messages"]
+    assert [m["role"] for m in read_messages] == ["system", "user", "assistant", "tool"]
+    read_result = json.loads(read_messages[3]["content"])
+    assert read_result["material_id"] == "license_complete"
+    assert read_result["pages"][0]["page"] == 1
+    assert "声明有效期至: 2027-08-31" in read_result["pages"][0]["text"]
+
+    check_messages = client.completions.calls[2]["messages"]
+    check_result = json.loads(check_messages[5]["content"])
+    assert check_messages[5]["tool_call_id"] == "call_test_1"
+    assert [e["result"] for e in check_result["evaluations"]] == ["not_hit", "not_hit"]
+    assert check_result["derived_business_license_status"] == "valid"
+
+
+def test_read_material_is_recorded_as_ok_event(policy) -> None:
+    """读取材料成功要入流水: 记材料 ID 与页数, 供运行记录复盘."""
+
+    client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(check_arguments()),
+            text_response("两条规则均为 not_hit."),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    read_event = outcome.tool_events[0]
+    assert read_event["name"] == "read_material"
+    assert read_event["status"] == "ok"
+    assert read_event["detail"] == {
+        "material_id": "license_complete",
+        "page_count": 1,
+    }
+    assert outcome.material_id == "license_complete"
+    assert outcome.material_sha256 == "0" * 64
+
+
+def test_material_must_be_read_before_check(policy) -> None:
+    """顺序规则: 没读材料就校验会被拒绝, 并提示先调用 read_material."""
+
+    client = FakeClient(
+        [
+            tool_call_response(check_arguments()),
+            read_response(),
+            tool_call_response(check_arguments(), call_id="call_test_2"),
+            text_response("复核完成, 两条规则均为 not_hit."),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    assert outcome.kind == "answer"
+    assert outcome.model_requests == 4
+    rejected = outcome.tool_events[0]
+    assert rejected["status"] == "error"
+    assert "read_material" in rejected["detail"]
+    correction = client.completions.calls[1]["messages"][-1]
+    assert correction["role"] == "tool"
+    assert "read_material" in json.loads(correction["content"])["error"]
+
+
+def test_check_without_read_exhausts_correction(policy) -> None:
+    """顺序规则不是提示词: 反复跳过读取直接校验, 纠正用尽即明确失败."""
+
+    client = FakeClient(
+        [
+            tool_call_response(check_arguments()),
+            tool_call_response(check_arguments(), call_id="call_test_2"),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    assert outcome.kind == "failed"
+    assert outcome.model_requests == 2
+    assert [event["status"] for event in outcome.tool_events] == ["error", "error"]
+    assert "check_materials" not in [
+        event["name"] for event in outcome.tool_events if event["status"] == "ok"
+    ]
+
+
+def test_read_material_rejects_unregistered_material_id(policy) -> None:
+    """读取材料只能读本次会话登记的那一份, 别的 ID 一律拒绝."""
+
+    client = FakeClient(
+        [
+            read_response("other_supplier_license"),
+            read_response(),
+            tool_call_response(check_arguments(), call_id="call_test_2"),
+            text_response("复核完成, 两条规则均为 not_hit."),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    assert outcome.kind == "answer"
+    rejected = outcome.tool_events[0]
+    assert rejected["status"] == "error"
+    assert "other_supplier_license" in rejected["detail"]
+
+
+def test_fabricated_date_source_mismatch_is_rejected(policy) -> None:
+    """来源核对: 模型编一个材料里没有的日期, 规则不执行并给一次纠正."""
+
+    client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(check_arguments(valid_until="2030-01-01")),
+            tool_call_response(check_arguments(), call_id="call_test_2"),
+            text_response("复核完成, 两条规则均为 not_hit."),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    assert outcome.kind == "answer"
+    rejected = outcome.tool_events[1]
+    assert rejected["status"] == "error"
+    assert rejected["name"] == "check_materials"
+    assert "business_license_valid_until" in rejected["detail"]
+
+
+def test_opposite_checklist_source_mismatch_is_rejected(policy) -> None:
+    """来源核对: 材料写着"齐全"而模型报不齐全, 同样是事实与原文不一致."""
+
+    client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(check_arguments(docs_complete=False)),
+            tool_call_response(check_arguments(), call_id="call_test_2"),
+            text_response("复核完成, 两条规则均为 not_hit."),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    assert outcome.kind == "answer"
+    assert outcome.tool_events[1]["status"] == "error"
+    assert "category_required_documents_complete" in outcome.tool_events[1]["detail"]
+
+
+def test_derived_status_follows_reference_date(policy) -> None:
+    """状态由程序派生: 同一份材料换个参考日期, 结论从 not_hit 变成 hit."""
+
+    client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(check_arguments()),
+            text_response("根据工具结果: VEN-001 命中, 处置为补件建议."),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=date(2027, 9, 1),
+        policy=policy,
+        client=client,
+    )
+
+    check_event = outcome.tool_events[1]
+    assert check_event["detail"]["derived_business_license_status"] == "expired"
+    evaluations = {e["rule_id"]: e for e in check_event["detail"]["evaluations"]}
+    assert evaluations["VEN-001"]["result"] == "hit"
+    assert evaluations["VEN-001"]["outcome"]["reason_code"] == "business_license_expired"
 
 
 def test_tool_result_is_followed_by_read_only_reminder(policy) -> None:
@@ -149,14 +392,21 @@ def test_tool_result_is_followed_by_read_only_reminder(policy) -> None:
 
     client = FakeClient(
         [
-            tool_call_response(submitted_facts().model_dump()),
+            read_response(),
+            tool_call_response(check_arguments()),
             text_response("两条规则均为 not_hit。"),
         ]
     )
 
-    run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
-    reminder = client.completions.calls[1]["messages"][-1]
+    reminder = client.completions.calls[2]["messages"][-1]
     assert reminder["role"] == "user"
     assert "没有写入案件状态" in reminder["content"]
 
@@ -166,23 +416,28 @@ def test_bad_json_gets_structured_error_and_correction(policy) -> None:
 
     client = FakeClient(
         [
+            read_response(),
             tool_call_response("{ not valid json"),
-            tool_call_response(submitted_facts().model_dump(), call_id="call_test_2"),
+            tool_call_response(check_arguments(), call_id="call_test_2"),
             text_response("重新检查完成, 两条规则均为 not_hit, 未命中不代表准入批准."),
         ]
     )
 
-    outcome = run_check(
-        "请检查这家供应商的材料", submitted=submitted_facts(), policy=policy, client=client
+    outcome = run_review(
+        "请检查这家供应商的材料",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
     )
 
     assert outcome.kind == "answer"
-    assert outcome.model_requests == 3
-    assert outcome.tool_attempts == 2
-    assert outcome.tool_events[0]["status"] == "error"
-    assert outcome.tool_events[0]["name"] == "check_materials"
-    assert "不是合法 JSON" in outcome.tool_events[0]["detail"]
-    error_message = client.completions.calls[1]["messages"][-1]
+    assert outcome.model_requests == 4
+    assert outcome.tool_attempts == 3
+    assert outcome.tool_events[1]["status"] == "error"
+    assert outcome.tool_events[1]["name"] == "check_materials"
+    assert "不是合法 JSON" in outcome.tool_events[1]["detail"]
+    error_message = client.completions.calls[2]["messages"][-1]
     assert error_message["role"] == "tool"
     assert error_message["tool_call_id"] == "call_test_1"
     assert "error" in json.loads(error_message["content"])
@@ -193,20 +448,25 @@ def test_second_bad_json_exhausts_correction(policy) -> None:
 
     client = FakeClient(
         [
+            read_response(),
             tool_call_response("{ bad"),
             tool_call_response("{ still bad", call_id="call_test_2"),
         ]
     )
 
-    outcome = run_check(
-        "请检查这家供应商的材料", submitted=submitted_facts(), policy=policy, client=client
+    outcome = run_review(
+        "请检查这家供应商的材料",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
     )
 
     assert outcome.kind == "failed"
-    assert outcome.model_requests == 2
-    assert outcome.tool_attempts == 2
-    # 审查修复 #4: 被拒绝的调用也必须入流水
-    assert len(outcome.tool_events) == 2
+    assert outcome.model_requests == 3
+    assert outcome.tool_attempts == 3
+    # 审查修复 #4: 被拒绝的调用也必须入流水(读取材料那次是 ok)
+    assert [event["status"] for event in outcome.tool_events] == ["ok", "error", "error"]
 
 
 # --- 剧本三: 剩余分支验收 -----------------------------------------------------
@@ -217,39 +477,27 @@ def test_unknown_tool_rejected_then_corrected(policy) -> None:
 
     client = FakeClient(
         [
+            read_response(),
             tool_call_response({}, call_id="call_evil", name="delete_all_suppliers"),
-            tool_call_response(submitted_facts().model_dump(), call_id="call_test_2"),
+            tool_call_response(check_arguments(), call_id="call_test_2"),
             text_response("检查完成, 两条规则均为 not_hit."),
         ]
     )
 
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "answer"
-    assert outcome.model_requests == 3
-    error_message = client.completions.calls[1]["messages"][-1]
+    assert outcome.model_requests == 4
+    error_message = client.completions.calls[2]["messages"][-1]
     assert error_message["role"] == "tool"
     assert error_message["tool_call_id"] == "call_evil"
     assert "未知工具" in json.loads(error_message["content"])["error"]
-
-
-def test_fabricated_arguments_rejected_then_corrected(policy) -> None:
-    """参数合法 JSON 但与快照不符(改写)时同样走纠正链."""
-
-    fabricated = {**submitted_facts().model_dump(), "category_required_documents_complete": False}
-    client = FakeClient(
-        [
-            tool_call_response(fabricated),
-            tool_call_response(submitted_facts().model_dump(), call_id="call_test_2"),
-            text_response("按快照事实复核, 两条规则均为 not_hit."),
-        ]
-    )
-
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
-
-    assert outcome.kind == "answer"
-    error_message = client.completions.calls[1]["messages"][-1]
-    assert "不一致" in json.loads(error_message["content"])["error"]
 
 
 def test_false_claim_without_call_forces_correction(policy) -> None:
@@ -258,18 +506,51 @@ def test_false_claim_without_call_forces_correction(policy) -> None:
     client = FakeClient(
         [
             text_response("检查完成, 两条规则均为 not_hit, 未命中不代表准入批准."),
-            tool_call_response(submitted_facts().model_dump(), call_id="call_test_2"),
+            read_response(),
+            tool_call_response(check_arguments(), call_id="call_test_2"),
             text_response("根据工具结果: 两条规则均为 not_hit."),
         ]
     )
 
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "answer"
-    assert outcome.model_requests == 3
+    assert outcome.model_requests == 4
     correction = client.completions.calls[1]["messages"][-1]
     assert correction["role"] == "user"
     assert "check_materials" in correction["content"]
+
+
+def test_text_answer_before_check_does_not_end_run(policy) -> None:
+    """只读了材料还没校验就下结论: 同样不算完成, 必须纠正后再校验."""
+
+    client = FakeClient(
+        [
+            read_response(),
+            text_response("材料看起来没问题, 符合准入要求."),
+            tool_call_response(check_arguments(), call_id="call_test_2"),
+            text_response("根据工具结果: 两条规则均为 not_hit."),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    assert outcome.kind == "answer"
+    assert outcome.model_requests == 4
+    assert [event["status"] for event in outcome.tool_events] == ["ok", "error", "ok"]
+    assert outcome.tool_events[1]["name"] == "<text-correction>"
 
 
 def test_followup_question_ends_run(policy) -> None:
@@ -282,8 +563,12 @@ def test_followup_question_ends_run(policy) -> None:
         ]
     )
 
-    outcome = run_check(
-        "帮我看看这家供应商", submitted=submitted_facts(), policy=policy, client=client
+    outcome = run_review(
+        "帮我看看这家供应商",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
     )
 
     assert outcome.kind == "question"
@@ -292,16 +577,17 @@ def test_followup_question_ends_run(policy) -> None:
 
 
 def test_model_request_budget_cap(policy) -> None:
-    """模型反复调用工具时请求数封顶, 达到上限明确失败."""
+    """模型反复读材料时请求数封顶, 达到上限明确失败."""
 
-    client = FakeClient(
-        [
-            tool_call_response(submitted_facts().model_dump(), call_id=f"call_loop_{i}")
-            for i in range(8)
-        ]
+    client = FakeClient([read_response(call_id=f"call_loop_{i}") for i in range(8)])
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
     )
-
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
 
     assert outcome.kind == "failed"
     assert outcome.model_requests == 8
@@ -313,8 +599,13 @@ def test_negative_total_timeout_fails_before_first_request(policy) -> None:
 
     client = FakeClient([])
 
-    outcome = run_check(
-        "请检查", submitted=submitted_facts(), policy=policy, client=client, total_timeout=-1.0
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+        total_timeout=-1.0,
     )
 
     assert outcome.kind == "failed"
@@ -327,9 +618,10 @@ def test_request_timeout_clamped_by_remaining_budget(policy) -> None:
 
     client = FakeClient([text_response("完成.")])
 
-    run_check(
+    run_review(
         "请检查",
-        submitted=submitted_facts(),
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
         policy=policy,
         client=client,
         request_timeout=30.0,
@@ -349,7 +641,13 @@ def test_network_failure_ends_immediately(policy) -> None:
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=BrokenCompletions()))
 
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "failed"
     assert outcome.model_requests == 1
@@ -377,23 +675,28 @@ def test_outcome_reports_usage_totals_and_tool_events(policy) -> None:
 
     client = FakeClient(
         [
-            with_usage(tool_call_response(submitted_facts().model_dump()), 100, 20),
-            with_usage(text_response("检查完成, 两条规则均为 not_hit."), 200, 30),
+            with_usage(read_response(), 100, 20),
+            with_usage(tool_call_response(check_arguments()), 100, 20),
+            with_usage(text_response("检查完成, 两条规则均为 not_hit."), 100, 10),
         ]
     )
 
-    outcome = run_check(
-        "请检查这家供应商的材料", submitted=submitted_facts(), policy=policy, client=client
+    outcome = run_review(
+        "请检查这家供应商的材料",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
     )
 
     assert outcome.prompt_tokens == 300
     assert outcome.completion_tokens == 50
-    assert len(outcome.tool_events) == 1
-    event = outcome.tool_events[0]
-    assert event["name"] == "check_materials"
-    assert event["status"] == "ok"
-    assert event["tool_call_id"] == "call_test_1"
-    assert [e["result"] for e in event["detail"]["evaluations"]] == ["not_hit", "not_hit"]
+    assert len(outcome.tool_events) == 2
+    check_event = outcome.tool_events[1]
+    assert check_event["name"] == "check_materials"
+    assert check_event["status"] == "ok"
+    assert check_event["tool_call_id"] == "call_test_1"
+    assert [e["result"] for e in check_event["detail"]["evaluations"]] == ["not_hit", "not_hit"]
 
 
 def test_unknown_tool_recorded_as_error_event(policy) -> None:
@@ -401,18 +704,23 @@ def test_unknown_tool_recorded_as_error_event(policy) -> None:
 
     client = FakeClient(
         [
+            read_response(),
             tool_call_response({}, call_id="call_evil", name="drop_all_tables"),
-            tool_call_response(submitted_facts().model_dump(), call_id="call_ok"),
+            tool_call_response(check_arguments(), call_id="call_ok"),
             text_response("最终只有真实检查结果可信."),
         ]
     )
 
-    outcome = run_check(
-        "请检查这家供应商的材料", submitted=submitted_facts(), policy=policy, client=client
+    outcome = run_review(
+        "请检查这家供应商的材料",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
     )
 
-    assert [event["status"] for event in outcome.tool_events] == ["error", "ok"]
-    assert outcome.tool_events[0]["tool_call_id"] == "call_evil"
+    assert [event["status"] for event in outcome.tool_events] == ["ok", "error", "ok"]
+    assert outcome.tool_events[1]["tool_call_id"] == "call_evil"
 
 
 # --- E1-b: 运行记录器 ------------------------------------------------------------
@@ -424,19 +732,30 @@ def make_outcome(text: str = "两条规则均为 not_hit.", kind: str = "answer"
     return AgentRunOutcome(
         kind=kind,
         text=text,
-        model_requests=2,
-        tool_attempts=1,
+        model_requests=3,
+        tool_attempts=2,
         elapsed_seconds=1.25,
         prompt_tokens=300,
         completion_tokens=50,
         tool_events=[
             {
+                "tool_call_id": "call_read_1",
+                "name": "read_material",
+                "status": "ok",
+                "detail": {"material_id": "license_complete", "page_count": 1},
+            },
+            {
                 "tool_call_id": "call_1",
                 "name": "check_materials",
                 "status": "ok",
                 "detail": {"policy_version": "1.0.0"},
-            }
+            },
         ],
+        user_request="请检查这家供应商的材料",
+        policy_version="1.0.0",
+        material_id="license_complete",
+        material_sha256="a" * 64,
+        reference_date="2026-09-01",
     )
 
 
@@ -458,8 +777,12 @@ def test_write_run_log_records_expected_fields(tmp_path) -> None:
     assert payload["kind"] == "answer"
     assert payload["text"] == "两条规则均为 not_hit."
     assert payload["usage"] == {"prompt_tokens": 300, "completion_tokens": 50}
-    assert payload["tool_events"][0]["status"] == "ok"
+    assert payload["tool_events"][1]["status"] == "ok"
     assert payload["elapsed_seconds"] == 1.25
+    # 材料身份必须入档: 哈希决定"这次审查的是哪一份文件"
+    assert payload["material_id"] == "license_complete"
+    assert payload["material_sha256"] == "a" * 64
+    assert payload["reference_date"] == "2026-09-01"
 
 
 def test_write_run_log_redacts_api_key_style_secrets(tmp_path) -> None:
@@ -477,7 +800,7 @@ def test_write_run_log_redacts_api_key_style_secrets(tmp_path) -> None:
     assert "sk-***" in written
 
 
-# --- E1-c: 启动入口配置与事实加载 -------------------------------------------------
+# --- E1-c: 启动入口配置与材料加载 -------------------------------------------------
 
 
 # 运行时生成测试密钥, 使源码中不出现凭据形状的字面量; 前缀仅用于断言报错不外泄密钥.
@@ -520,34 +843,26 @@ def test_load_llm_settings_returns_values_when_complete() -> None:
     assert settings.base_url == "https://example.test/compatible-mode/v1"
 
 
-def test_load_submitted_facts_reads_valid_and_unknown_variants(tmp_path) -> None:
-    """正常样例还原全部事实; 未知变体不写完整性字段即得 None."""
+def test_load_material_reads_fixed_sample() -> None:
+    """启动入口读取固定样例: 材料 ID 取文件名主干, 页面文本可核对."""
 
-    normal = tmp_path / "normal.json"
-    normal.write_text(
-        json.dumps(submitted_facts().model_dump(), ensure_ascii=False), encoding="utf-8"
-    )
-    facts = load_submitted_facts(normal)
-    assert facts.category_required_documents_complete is True
+    loaded = load_material(MATERIALS_DIR / "license_complete.pdf")
 
-    unknown = tmp_path / "unknown.json"
-    payload = submitted_facts().model_dump()
-    del payload["category_required_documents_complete"]
-    payload["sources"].pop("category_required_documents_complete")
-    unknown.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    assert load_submitted_facts(unknown).category_required_documents_complete is None
+    assert loaded.material_id == "license_complete"
+    assert loaded.page_count == 1
+    assert "声明有效期至: 2027-08-31" in loaded.pages[0]
 
 
-def test_load_submitted_facts_rejects_bad_input(tmp_path) -> None:
-    """文件不存在或内容非法都归一为 AgentConfigError, 不向外抛裸异常."""
+def test_load_material_rejects_bad_input(tmp_path) -> None:
+    """文件不存在或不是文本 PDF 都归一为 AgentConfigError, 不向外抛裸异常."""
 
     with pytest.raises(AgentConfigError):
-        load_submitted_facts(tmp_path / "nope.json")
+        load_material(tmp_path / "nope.pdf")
 
-    broken = tmp_path / "broken.json"
-    broken.write_text("{ not json", encoding="utf-8")
-    with pytest.raises(AgentConfigError):
-        load_submitted_facts(broken)
+    scanned = tmp_path / "scanned.pdf"
+    scanned.write_bytes((MATERIALS_DIR / "license_scanned.pdf").read_bytes())
+    with pytest.raises(AgentConfigError, match="扫描件"):
+        load_material(scanned)
 
 
 # --- 评审收尾: 结论背书, 时效与记录完整性 --------------------------------------
@@ -559,15 +874,22 @@ def test_unverified_claim_gets_correction_then_answer(policy) -> None:
     client = FakeClient(
         [
             text_response("材料齐全, 营业执照有效, 符合准入要求。"),
-            tool_call_response(submitted_facts().model_dump(), call_id="call_test_2"),
+            read_response(),
+            tool_call_response(check_arguments(), call_id="call_test_2"),
             text_response("根据工具结果: 两条规则均为 not_hit。"),
         ]
     )
 
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "answer"
-    assert outcome.model_requests == 3
+    assert outcome.model_requests == 4
     correction = client.completions.calls[1]["messages"][-1]
     assert correction["role"] == "user"
     assert "check_materials" in correction["content"]
@@ -583,7 +905,13 @@ def test_second_unverified_claim_fails(policy) -> None:
         ]
     )
 
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "failed"
     assert outcome.model_requests == 2
@@ -594,7 +922,13 @@ def test_empty_final_text_fails(policy) -> None:
 
     client = FakeClient([text_response("")])
 
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "failed"
 
@@ -604,12 +938,19 @@ def test_truncated_response_fails(policy) -> None:
 
     client = FakeClient(
         [
-            tool_call_response(submitted_facts().model_dump()),
+            read_response(),
+            tool_call_response(check_arguments()),
             text_response("检查完成, 两条规则均为 not", finish_reason="length"),
         ]
     )
 
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "failed"
 
@@ -624,8 +965,13 @@ def test_stale_response_fails_after_total_timeout(policy) -> None:
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SlowCompletions()))
 
-    outcome = run_check(
-        "请检查", submitted=submitted_facts(), policy=policy, client=client, total_timeout=0.01
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+        total_timeout=0.01,
     )
 
     assert outcome.kind == "failed"
@@ -637,48 +983,67 @@ def test_events_carry_raw_arguments(policy) -> None:
 
     client = FakeClient(
         [
+            read_response(),
             tool_call_response("{ bad args"),
-            tool_call_response(submitted_facts().model_dump(), call_id="call_test_2"),
+            tool_call_response(check_arguments(), call_id="call_test_2"),
             text_response("复核完成。"),
         ]
     )
 
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
-    assert outcome.tool_events[0]["arguments"] == "{ bad args"
-    assert "category_required_documents_complete" in outcome.tool_events[1]["arguments"]
+    assert outcome.tool_events[1]["arguments"] == "{ bad args"
+    assert "category_required_documents_complete" in outcome.tool_events[2]["arguments"]
 
 
 def test_outcome_carries_context_for_log(policy) -> None:
-    """运行产出携带用户请求, 提交快照与规则版本供记录器使用."""
+    """运行产出携带用户请求, 材料身份与参考日期供记录器使用."""
 
     client = FakeClient(
         [
-            tool_call_response(submitted_facts().model_dump()),
+            read_response(),
+            tool_call_response(check_arguments()),
             text_response("完成。"),
         ]
     )
 
-    outcome = run_check(
-        "请检查这家供应商的材料", submitted=submitted_facts(), policy=policy, client=client
+    outcome = run_review(
+        "请检查这家供应商的材料",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
     )
 
     assert outcome.user_request == "请检查这家供应商的材料"
-    assert outcome.submitted_facts["category_required_documents_complete"] is True
+    assert outcome.material_id == "license_complete"
+    assert outcome.material_sha256 == "0" * 64
+    assert outcome.reference_date == "2026-09-01"
     assert outcome.policy_version == "1.0.0"
 
 
 def test_run_log_includes_request_context(policy, tmp_path) -> None:
-    """落盘记录必须足以复现: 请求, 快照与规则版本都要在档."""
+    """落盘记录必须足以复现: 请求, 材料身份, 参考日期与规则版本都要在档."""
 
     client = FakeClient(
         [
-            tool_call_response(submitted_facts().model_dump()),
+            read_response(),
+            tool_call_response(check_arguments()),
             text_response("完成。"),
         ]
     )
-    outcome = run_check(
-        "请检查这家供应商", submitted=submitted_facts(), policy=policy, client=client
+    outcome = run_review(
+        "请检查这家供应商",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
     )
 
     path = write_run_log(
@@ -690,7 +1055,8 @@ def test_run_log_includes_request_context(policy, tmp_path) -> None:
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["user_request"] == "请检查这家供应商"
-    assert payload["submitted_facts"]["business_license_document_status"] == "valid"
+    assert payload["material_id"] == "license_complete"
+    assert payload["reference_date"] == "2026-09-01"
     assert payload["policy_version"] == "1.0.0"
 
 
@@ -707,7 +1073,13 @@ def test_punctuation_bypass_now_requires_ask_user(policy) -> None:
         ]
     )
 
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "question"
     assert outcome.model_requests == 2
@@ -721,7 +1093,13 @@ def test_ask_user_recorded_and_ends_run(policy) -> None:
 
     client = FakeClient([ask_user_response("请问要检查哪家供应商?")])
 
-    outcome = run_check("帮我看看", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "帮我看看",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "question"
     assert outcome.model_requests == 1
@@ -732,16 +1110,41 @@ def test_ask_user_recorded_and_ends_run(policy) -> None:
     assert event["detail"]["question"] == "请问要检查哪家供应商?"
 
 
-def test_model_request_exposes_check_and_question_tools(policy) -> None:
-    """真实模型请求必须同时声明校验与追问工具, 否则模型无法选择追问出口."""
+def test_model_request_exposes_read_check_and_question_tools(policy) -> None:
+    """真实模型请求必须声明读材料, 校验与追问三个工具, 否则模型无从选择出口."""
 
     client = FakeClient([ask_user_response("请补充缺失材料的来源定位.")])
 
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "question"
     tool_names = [tool["function"]["name"] for tool in client.completions.calls[0]["tools"]]
-    assert tool_names == ["check_materials", "ask_user"]
+    assert tool_names == ["read_material", "check_materials", "ask_user"]
+
+
+def test_check_tool_accepts_declared_date_not_status(policy) -> None:
+    """工具声明里只有原始事实: 有效期截止日与清单状态, 没有执照状态枚举."""
+
+    client = FakeClient([ask_user_response("请先确认材料是否齐全.")])
+
+    run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    check_tool = client.completions.calls[0]["tools"][1]["function"]
+    properties = check_tool["parameters"]["properties"]
+    assert "business_license_valid_until" in properties
+    assert "business_license_document_status" not in properties
 
 
 def test_ask_user_empty_question_uses_correction_budget(policy) -> None:
@@ -754,7 +1157,13 @@ def test_ask_user_empty_question_uses_correction_budget(policy) -> None:
         ]
     )
 
-    outcome = run_check("帮我看看", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "帮我看看",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "question"
     assert [event["status"] for event in outcome.tool_events] == ["error", "ok"]
@@ -773,7 +1182,13 @@ def test_ask_param_correction_is_bucketed_from_text_correction(policy) -> None:
         ]
     )
 
-    outcome = run_check("帮我看看", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "帮我看看",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "question"
     assert outcome.model_requests == 3
@@ -806,7 +1221,13 @@ def test_multiple_calls_in_one_response_rejected(policy) -> None:
         [_completion(dual), ask_user_response("一次只问一个: 需要检查哪家?", call_id="call_ask_ok")]
     )
 
-    outcome = run_check("帮我看看", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "帮我看看",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "question"
     assert outcome.tool_attempts == 3  # 双调用各计一次 + 纠正后的合法调用
@@ -818,46 +1239,79 @@ def test_ask_user_after_check_keeps_verified_result(policy) -> None:
 
     client = FakeClient(
         [
-            tool_call_response(submitted_facts().model_dump()),
+            read_response(),
+            tool_call_response(check_arguments()),
             ask_user_response("还需要补充其他材料信息吗?", call_id="call_ask_ok"),
         ]
     )
 
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "question"
-    assert outcome.tool_events[0]["name"] == "check_materials"
-    assert outcome.tool_events[0]["status"] == "ok"
-    assert [e["result"] for e in outcome.tool_events[0]["detail"]["evaluations"]] == [
-        "not_hit",
-        "not_hit",
-    ]
+    check_event = outcome.tool_events[1]
+    assert check_event["name"] == "check_materials"
+    assert check_event["status"] == "ok"
+    assert [e["result"] for e in check_event["detail"]["evaluations"]] == ["not_hit", "not_hit"]
 
 
 def test_missing_facts_require_ask_user_after_check(policy) -> None:
     """校验发现缺失事实后, 带追问的纯文本必须纠正为 ask_user 调用."""
 
-    submitted = StructuredFacts(
-        business_license_document_status="valid",
-        sources={"business_license_document_status": "BL-001@page_1"},
-    )
     client = FakeClient(
         [
-            tool_call_response(submitted.model_dump(exclude_none=True)),
+            read_response(),
+            tool_call_response(check_arguments(docs_complete=None)),
             text_response("当前无法判断材料是否齐全。请问品类必填材料是否齐全?"),
             ask_user_response("请问品类必填材料是否齐全?", call_id="call_ask_ok"),
         ]
     )
 
-    outcome = run_check("请检查", submitted=submitted, policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "question"
-    assert outcome.model_requests == 3
+    assert outcome.model_requests == 4
     assert [event["name"] for event in outcome.tool_events] == [
+        "read_material",
         "check_materials",
         "<text-correction>",
         "ask_user",
     ]
+
+
+def test_missing_facts_block_answer_without_question(policy) -> None:
+    """缺字段时连"看似完整"的结论也不放行: 只能追问, 不能收尾."""
+
+    client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(check_arguments(docs_complete=None)),
+            text_response("材料已检查完毕, 两条规则均未命中, 建议通过准入."),
+            text_response("材料已检查完毕, 建议通过准入."),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    assert outcome.kind == "failed"
+    assert outcome.model_requests == 4
 
 
 def test_empty_choices_fails_without_crash(policy) -> None:
@@ -872,7 +1326,13 @@ def test_empty_choices_fails_without_crash(policy) -> None:
     )
     client = FakeClient([empty])
 
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "failed"
     assert "choices" in outcome.text
@@ -884,10 +1344,16 @@ def test_tool_internal_error_fails_cleanly(policy, monkeypatch) -> None:
     def boom(*args, **kwargs):
         raise RuntimeError("意外内部故障")
 
-    monkeypatch.setattr("vendorguard.agent.check_materials", boom)
-    client = FakeClient([tool_call_response(submitted_facts().model_dump())])
+    monkeypatch.setattr("vendorguard.agent.check_extracted_facts", boom)
+    client = FakeClient([read_response(), tool_call_response(check_arguments())])
 
-    outcome = run_check("请检查", submitted=submitted_facts(), policy=policy, client=client)
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
 
     assert outcome.kind == "failed"
     assert "内部错误" in outcome.text
@@ -897,7 +1363,7 @@ def test_tool_internal_error_fails_cleanly(policy, monkeypatch) -> None:
 def test_stale_tool_response_not_executed(policy) -> None:
     """响应迟到越过总时限: 工具不得执行, 事件流水保持为空并报告超时."""
 
-    scripted = tool_call_response(submitted_facts().model_dump())
+    scripted = read_response()
 
     class SlowCompletions:
         def create(self, **kwargs):
@@ -906,8 +1372,13 @@ def test_stale_tool_response_not_executed(policy) -> None:
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SlowCompletions()))
 
-    outcome = run_check(
-        "请检查", submitted=submitted_facts(), policy=policy, client=client, total_timeout=0.01
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+        total_timeout=0.01,
     )
 
     assert outcome.kind == "failed"
@@ -928,3 +1399,90 @@ def test_write_run_log_redacts_hyphen_underscore_keys(tmp_path) -> None:
     written = path.read_text(encoding="utf-8")
     assert "sk-abc_def-9876543210" not in written
     assert "sk-***" in written
+
+
+def test_supplement_round_resolves_missing_fact(policy) -> None:
+    """两轮闭环: 第一轮缺字段追问, 登记补充后第二轮引用补充来源并给出结论。"""
+
+    session = ReviewSession.start(material())
+    first_client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(check_arguments(valid_until=None)),
+            text_response("材料里没有有效期截止日, 需要向用户追问。"),
+            ask_user_response("请提供营业执照的有效期截止日?", call_id="call_ask_ok"),
+        ]
+    )
+
+    first = run_review(
+        "请检查",
+        session=session,
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=first_client,
+    )
+
+    assert first.kind == "question"
+    assert first.supplement_rounds == 0
+    assert first.tool_events[-1]["name"] == "ask_user"
+
+    session.record_supplement("补充说明: 营业执照有效期至 2030年01月31日")
+    second_client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(
+                check_arguments(valid_until="2030-01-31", date_source="user_supplement@round:1")
+            ),
+            text_response("根据工具结果: 两条规则均为 not_hit."),
+        ]
+    )
+
+    second = run_review(
+        "请检查",
+        session=session,
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=second_client,
+    )
+
+    assert second.kind == "answer"
+    assert second.supplement_rounds == 1
+    # 第二轮开场消息必须带上补充原文与它的来源定位, 否则模型无从引用
+    opening = second_client.completions.calls[0]["messages"][1]["content"]
+    assert "user_supplement@round:1" in opening
+    assert "2030年01月31日" in opening
+    check_event = second.tool_events[1]
+    assert check_event["detail"]["verified_sources"]["business_license_valid_until"] == (
+        "user_supplement@round:1"
+    )
+    assert check_event["detail"]["derived_business_license_status"] == "valid"
+
+
+def test_unregistered_supplement_round_is_rejected_in_loop(policy) -> None:
+    """模型引用还没登记的补充轮次: 来源核对失败, 规则不执行。"""
+
+    session = ReviewSession.start(material())
+    client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(
+                check_arguments(valid_until="2030-01-31", date_source="user_supplement@round:2")
+            ),
+            tool_call_response(
+                check_arguments(valid_until="2030-01-31", date_source="user_supplement@round:2"),
+                call_id="call_test_2",
+            ),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=session,
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    assert outcome.kind == "failed"
+    assert outcome.tool_events[1]["status"] == "error"
+    assert "user_supplement@round:2" in outcome.tool_events[1]["detail"]
