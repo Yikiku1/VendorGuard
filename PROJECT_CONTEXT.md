@@ -1,6 +1,6 @@
 # VendorGuard 当前上下文
 
-> 更新：2026-09-15。M2 已完成，M3 已进入实现（M3-1 完成）；项目定位为 AI Agent / AI 应用开发求职。
+> 更新：2026-09-15。M3 已完成（制度检索与结构化报告）；项目定位为 AI Agent / AI 应用开发求职。
 
 ## 当前定位与入口
 
@@ -27,7 +27,7 @@ VendorGuard 是供应商材料审查 Agent：用户提交材料，Agent 调用�
 | RAG 持久化 | `evidence/models.py`、迁移 `b0604f36e9a4` 已存在，包含四层实体和版本关联表；本轮开始时两者尚未提交，`alembic/env.py` 也有已有改动 |
 | Agent M1 | `agent.py` 与 `agent_tools.py` 已实现真实模型工具循环；预算、错误纠正和脱敏记录机制仍在使用，M1 的快照事实入口（`parse_tool_arguments` / `check_materials`）已删除 |
 | Agent M2 材料输入 | `materials.py` 逐页读取文本 PDF（失败码 `file_not_found`、`not_a_pdf`、`scanned_pdf_unsupported`、`empty_material`）并提供来源核对 `MaterialSources`；`agent_tools.py` 的提取事实管线在规则执行前核对来源、由程序派生执照状态；`agent.py` 的循环先 `read_material` 再 `check_materials`；`agent_session.py` 持有材料与用户补充，支持一次补充闭环。三份自制样例与生成脚本在 `data/demo/materials/`、`scripts/make_demo_materials.py` |
-| Agent M3 制度检索 | `retrieval/chunk_list.py` 从冻结语料生成现行两份制度的 22 条片段并落盘 `data/retrieval/chunks_v1.jsonl`，每条可用 `node_key`、定位路径、字符区间与两份哈希回指解析器节点和归一化正文；候选范围由代码白名单 `CURRENT_EDITION_KEYS` 限定，旧版与外部法规留在仓库作负例，构建入口 `scripts/build_chunk_list.py`。`retrieval/embedding.py` 按 20 条分批生成正文向量并缓存到 `data/retrieval/cache/`（gitignore 不入库），缓存按"模型名 + 正文指纹"整体失效，查询向量不入缓存，构建入口 `scripts/build_embedding_cache.py`。`retrieval/search.py` 先按白名单过滤再算精确 cosine（Top-5，同分按 `chunk_key`；参数错误抛 `QueryError`、配置失败抛 `SearchError`）。`agent.py` 的循环已接入 `search_policy`（启动装载 `load_policy_index`、登记本次真实返回节点、工具结果不含分数）与 `submit_report`（唯一结论出口：纯文本不再产生 `kind=answer`），报告经 `agent_report.py` 的引用闸门核对后才写进 `AgentRunOutcome.report` 与运行记录；节点登记与校验结果都是**单次运行内的局部状态**，CLI 补充轮重新调用 `run_review()` 并逐轮打印报告，命令行预览入口是 `scripts/preview_search.py`。M3-7（8 题评测与真实运行收尾）尚未开始 |
+| Agent M3 制度检索 | `retrieval/chunk_list.py` 从冻结语料生成现行两份制度的 22 条片段并落盘 `data/retrieval/chunks_v1.jsonl`，每条可用 `node_key`、定位路径、字符区间与两份哈希回指解析器节点和归一化正文；候选范围由代码白名单 `CURRENT_EDITION_KEYS` 限定，旧版与外部法规留在仓库作负例，构建入口 `scripts/build_chunk_list.py`。`retrieval/embedding.py` 按 20 条分批生成正文向量并缓存到 `data/retrieval/cache/`（gitignore 不入库），缓存按"模型名 + 正文指纹"整体失效，查询向量不入缓存，构建入口 `scripts/build_embedding_cache.py`。`retrieval/search.py` 先按白名单过滤再算精确 cosine（Top-5，同分按 `chunk_key`；参数错误抛 `QueryError`、配置失败抛 `SearchError`）。`agent.py` 的循环已接入 `search_policy`（启动装载 `load_policy_index`、登记本次真实返回节点、工具结果不含分数）与 `submit_report`（唯一结论出口：纯文本不再产生 `kind=answer`），报告经 `agent_report.py` 的引用闸门核对后才写进 `AgentRunOutcome.report` 与运行记录；节点登记与校验结果都是**单次运行内的局部状态**，CLI 补充轮重新调用 `run_review()` 并逐轮打印报告。检索数据与命令：`data/retrieval/chunks_v1.jsonl`（22 条）、`data/retrieval/cache/`（向量，gitignore），脚本 `scripts/build_chunk_list.py`、`build_embedding_cache.py`、`preview_search.py`、`run_rag_eval.py`（8 题评测结果在 `data/evals/rag_phase1_m3_8q_result.json`）。前端与工作台（M4）尚未实现 |
 | 后续产品链路 | 制度检索、带引用报告和前端尚未实现；跨轮对话只支持一次补充，未做长期会话管理 |
 
 当前案件评估中的正常路径仍停在 `analyzing`，补件路径可到 `pending_documents`；已有人工决定接口不等于端到端审批已跑通。Agent 初审报告不依赖推进这些业务状态，也不能把报告确认写成供应商准入批准。
@@ -70,6 +70,8 @@ M3-0 复核为 247 项单测与 Ruff、格式检查、mypy 全绿，提交三份
 
 2026-09-15 M3-6 完成：第二轮被证明是独立的一次运行（`returned_nodes`、`checked_result` 都是 `run_review()` 的局部状态；CLI 补充轮重新调用它，开场只带材料与补充原文）。新增 4 项循环用例 + 3 项 CLI 用例，并修掉一个真实缺陷：CLI 的报告打印块原本只覆盖第一轮，补充轮只打印一行摘要——现抽成 `_print_report()` 由每轮调用；另在校验缺字段后的 user 提醒里点名"必须调用 ask_user 追问，不能提交报告"（实测模型缺字段时会反复去交报告）。全量单测 343 通过，Ruff、格式检查与 mypy 全绿。
 
-2026-09-15 M3-6 真实运行与模型选择：补充案例先用 `qwen3.7-flash` 连续 5 次全失败（空字符串日期、编造日期、缺字段后去交报告或给纯文本、反复参数错误），共同点是唯一那次共享纠正先被格式错误吃掉；**换 `qwen3.8-max` 同案例一次通过**，第二轮检索返回 5 个节点、报告引用的 3 个全在其中，材料来源正是 `user_supplement@round:1` 与 `license_missing_date@page:2`。结论：`qwen3.7-flash` 的失败是**模型行为方差**，不改 M1 评审过的纠正预算设计；M3-7 的评测与真实运行统一用 `qwen3.8-max` 并写明模型名。遗留小 gap：CLI 只在最后写一份运行记录，补充案例第一轮的追问事件不进档。
+2026-09-15 M3-7 与 M3 收尾：评测脚本 `scripts/run_rag_eval.py` 只读原评测数据里 PRD 选定的 8 个 `case_id`，结果写入 `data/evals/rag_phase1_m3_8q_result.json`（原数据未改，其余 7 题明确未覆盖、不算进成绩）。逐题结果：3 道正常题必需依据全部进 Top-5（3/3）；2 道需纠正前提的边界题也全部进 Top-5（2/2）；3 道 `no_answer` 题标为待人工核对（检索不设阈值、恒返回 Top-5，是否判依据不足不由检索决定），并逐题列出 Top-5 与"现行版本但不应作为依据"的节点；**非现行被禁版本命中 0**，程序可判定的错误或无效引用 0。真实运行三类样例齐备：完整样例（退出码 0，2 条发现 + 3 个现行节点引用）、补充样例（两轮闭环，退出码 0，引用全部来自第二轮检索结果）、扫描件（材料层拒绝，退出码 2，未发模型请求），记录都在 `logs/agent-runs/`。README 已按 M3 现状重写。
+
+M3 已知限制（如实记录）：`qwen3.7-flash` 在补充案例上 5 次全失败、`qwen3.8-max` 一次通过，属模型行为方差；措辞检查是黑名单兜底；embedding 非逐分量确定，"可复现"绑定具体缓存文件（结果 JSON 记了 `cache_key`）；CLI 只在最后写一份运行记录，补充案例第一轮的追问事件不进档。下一步是 M4（工作台与演示）。
 
 里程碑进度仅在 [Agent 开发计划](project_docs/VendorGuard-Agent开发计划.md) 更新，避免再维护多套看板。
