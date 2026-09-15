@@ -1,0 +1,581 @@
+{
+  "generated_at": "2026-09-15T15:02:40",
+  "eval_set": "data\\evals\\rag_phase1.json",
+  "selected_case_ids": [
+    "rag_phase1_current_admission_license_consistency",
+    "rag_phase1_critical_material_quality_certificate",
+    "rag_phase1_standard_components_quality_certificate",
+    "rag_phase1_license_authenticity_no_answer",
+    "rag_phase1_quality_certificate_without_category_no_answer",
+    "rag_phase1_retired_policy_late_quality_certificate",
+    "rag_phase1_government_duty_as_internal_rule_no_answer",
+    "rag_phase1_voluntary_certification_overrides_policy"
+  ],
+  "uncovered_case_count": 7,
+  "embedding_model": "qwen3.7-text-embedding",
+  "cache_key": "66c818307f88c61484b53a542db3c35323ffb924cd636878bbce9fd2d9ec03ab",
+  "chunk_count": 22,
+  "summary": {
+    "normal_required_in_top5": "3/3",
+    "boundary_program_checked": "2/2",
+    "boundary_manual_review": [
+      "rag_phase1_license_authenticity_no_answer",
+      "rag_phase1_quality_certificate_without_category_no_answer",
+      "rag_phase1_government_duty_as_internal_rule_no_answer"
+    ],
+    "forbidden_non_current_hits": 0,
+    "invalid_citations_program_judged": 0,
+    "notes": [
+      "非现行的被禁版本 (旧版制度, 外部法规) 命中数按设计应为 0: 候选在打分前就按现行白名单过滤 (M3-3 有测试)。",
+      "错误或无效引用只统计程序可判定的部分 (伪造节点, 旧版本, 未检索过的节点), 这些在执行路径上由引用闸门与白名单保证; 引用与结论是否相符属语义判断, 留给固定案例人工核对。",
+      "no_answer 类题目把现行版本列为 forbidden, 指的是结论不能以它们为依据, 它们在 Top-5 里出现属正常, 逐题记在 forbidden_current_hits 里交人工核对。"
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "rag_phase1_current_admission_license_consistency",
+      "kind": "answerable",
+      "expected_outcome": "answerable",
+      "query": "截至 2026-09-01, 供应商准入时营业执照需要与申请表核对哪些字段?",
+      "verdict": "命中: 必需依据都在 Top-5",
+      "required_slots": [
+        {
+          "slot_key": "current_admission_policy",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "正常准入条件"
+          ],
+          "hit": true
+        }
+      ],
+      "forbidden_non_current_hits": [],
+      "forbidden_current_hits": [],
+      "top5": [
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_2",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "正常准入条件"
+          ],
+          "score": 0.7273,
+          "text_head": "任一条件不满足时，不得由采购专员直接登记，必须转入补件或人工核验环节。"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_4_table_row_1",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第1行"
+          ],
+          "score": 0.703,
+          "text_head": "| critical_material | 营业执照 | 必需 | 截止日当天仍视为有效 |"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_2_table_row_1",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "普通工业部件必需材料",
+            "第1行"
+          ],
+          "score": 0.6568,
+          "text_head": "| standard_components | 营业执照 | 必需 | 截止日当天仍视为有效 |"
+        },
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_3",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "必需材料要求"
+          ],
+          "score": 0.6544,
+          "text_head": "与旧版办法的差别在于：质量证书对关键物料品类属于必需材料，不再允许通过后再补交。"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_3_table_row_1",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "普通紧固件必需材料",
+            "第1行"
+          ],
+          "score": 0.6472,
+          "text_head": "| standard_fasteners | 营业执照 | 必需 | 截止日当天仍视为有效 |"
+        }
+      ]
+    },
+    {
+      "case_id": "rag_phase1_critical_material_quality_certificate",
+      "kind": "answerable",
+      "expected_outcome": "answerable",
+      "query": "截至 2026-09-01, critical_material 品类准入是否必须提供质量证书?",
+      "verdict": "命中: 必需依据都在 Top-5",
+      "required_slots": [
+        {
+          "slot_key": "critical_material_requirement",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第2行"
+          ],
+          "hit": true
+        }
+      ],
+      "forbidden_non_current_hits": [],
+      "forbidden_current_hits": [],
+      "top5": [
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_4_table_row_2",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第2行"
+          ],
+          "score": 0.8717,
+          "text_head": "| critical_material | 质量证书 | 必需 | 剩余有效期不少于 90 天 |"
+        },
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_3",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "必需材料要求"
+          ],
+          "score": 0.8191,
+          "text_head": "与旧版办法的差别在于：质量证书对关键物料品类属于必需材料，不再允许通过后再补交。"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_4_table_row_4",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第4行"
+          ],
+          "score": 0.7823,
+          "text_head": "| critical_material | 交付记录 | 非必需 | 可用同品类客户合作证明替代 |"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_4_table_row_3",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第3行"
+          ],
+          "score": 0.7758,
+          "text_head": "| critical_material | 报价单 | 必需 | 出具之日起 90 天内 |"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_2_table_row_4",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "普通工业部件必需材料",
+            "第4行"
+          ],
+          "score": 0.7756,
+          "text_head": "| standard_components | 质量证书 | 非必需 | 自愿提供时可作为加分材料 |"
+        }
+      ]
+    },
+    {
+      "case_id": "rag_phase1_standard_components_quality_certificate",
+      "kind": "answerable",
+      "expected_outcome": "answerable",
+      "query": "截至 2026-09-01, standard_components 品类缺少质量证书是否属于材料不齐?",
+      "verdict": "命中: 必需依据都在 Top-5",
+      "required_slots": [
+        {
+          "slot_key": "standard_components_requirement",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "普通工业部件必需材料",
+            "第4行"
+          ],
+          "hit": true
+        }
+      ],
+      "forbidden_non_current_hits": [],
+      "forbidden_current_hits": [],
+      "top5": [
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_2_table_row_4",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "普通工业部件必需材料",
+            "第4行"
+          ],
+          "score": 0.8057,
+          "text_head": "| standard_components | 质量证书 | 非必需 | 自愿提供时可作为加分材料 |"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_2_table_row_1",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "普通工业部件必需材料",
+            "第1行"
+          ],
+          "score": 0.6963,
+          "text_head": "| standard_components | 营业执照 | 必需 | 截止日当天仍视为有效 |"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_2_table_row_2",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "普通工业部件必需材料",
+            "第2行"
+          ],
+          "score": 0.6947,
+          "text_head": "| standard_components | 报价单 | 必需 | 出具之日起 90 天内 |"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_2_table_row_3",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "普通工业部件必需材料",
+            "第3行"
+          ],
+          "score": 0.6919,
+          "text_head": "| standard_components | 交付记录 | 必需 | 覆盖最近 20 个交付批次 |"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_4_table_row_2",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第2行"
+          ],
+          "score": 0.6896,
+          "text_head": "| critical_material | 质量证书 | 必需 | 剩余有效期不少于 90 天 |"
+        }
+      ]
+    },
+    {
+      "case_id": "rag_phase1_license_authenticity_no_answer",
+      "kind": "no_answer",
+      "expected_outcome": "no_answer",
+      "query": "仅凭供应商上传的营业执照图片, 能否确认该营业执照真实有效且属于该供应商?",
+      "verdict": "待人工核对: 检索必然返回 Top-5, 是否判依据不足不由检索决定",
+      "required_slots": [],
+      "forbidden_non_current_hits": [],
+      "forbidden_current_hits": [
+        "demo_supplier_admission_policy_v2_section_4",
+        "demo_supplier_admission_policy_v2_section_2"
+      ],
+      "top5": [
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_4_table_row_1",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第1行"
+          ],
+          "score": 0.5837,
+          "text_head": "| critical_material | 营业执照 | 必需 | 截止日当天仍视为有效 |"
+        },
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_4",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "资质与证书材料的有效性"
+          ],
+          "score": 0.5698,
+          "text_head": "材料无法辨识有效期截止日的，按缺失处理并要求重新提交，不得凭推测填写。"
+        },
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_2",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "正常准入条件"
+          ],
+          "score": 0.5653,
+          "text_head": "任一条件不满足时，不得由采购专员直接登记，必须转入补件或人工核验环节。"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_2_table_row_1",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "普通工业部件必需材料",
+            "第1行"
+          ],
+          "score": 0.5378,
+          "text_head": "| standard_components | 营业执照 | 必需 | 截止日当天仍视为有效 |"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_3_table_row_1",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "普通紧固件必需材料",
+            "第1行"
+          ],
+          "score": 0.5285,
+          "text_head": "| standard_fasteners | 营业执照 | 必需 | 截止日当天仍视为有效 |"
+        }
+      ]
+    },
+    {
+      "case_id": "rag_phase1_quality_certificate_without_category_no_answer",
+      "kind": "no_answer",
+      "expected_outcome": "no_answer",
+      "query": "未提供供应商品类时, 能否直接要求所有供应商提交质量证书?",
+      "verdict": "待人工核对: 检索必然返回 Top-5, 是否判依据不足不由检索决定",
+      "required_slots": [],
+      "forbidden_non_current_hits": [],
+      "forbidden_current_hits": [
+        "demo_supplier_required_documents_policy_v3_section_2_table_row_4",
+        "demo_supplier_required_documents_policy_v3_section_4_table_row_2",
+        "demo_supplier_required_documents_policy_v3_section_2_table_row_1"
+      ],
+      "top5": [
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_3",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "必需材料要求"
+          ],
+          "score": 0.7431,
+          "text_head": "与旧版办法的差别在于：质量证书对关键物料品类属于必需材料，不再允许通过后再补交。"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_2_table_row_4",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "普通工业部件必需材料",
+            "第4行"
+          ],
+          "score": 0.739,
+          "text_head": "| standard_components | 质量证书 | 非必需 | 自愿提供时可作为加分材料 |"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_4_table_row_2",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第2行"
+          ],
+          "score": 0.7053,
+          "text_head": "| critical_material | 质量证书 | 必需 | 剩余有效期不少于 90 天 |"
+        },
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_4",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "资质与证书材料的有效性"
+          ],
+          "score": 0.6793,
+          "text_head": "材料无法辨识有效期截止日的，按缺失处理并要求重新提交，不得凭推测填写。"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_2_table_row_1",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "普通工业部件必需材料",
+            "第1行"
+          ],
+          "score": 0.6395,
+          "text_head": "| standard_components | 营业执照 | 必需 | 截止日当天仍视为有效 |"
+        }
+      ]
+    },
+    {
+      "case_id": "rag_phase1_retired_policy_late_quality_certificate",
+      "kind": "adversarial_negative",
+      "expected_outcome": "answerable",
+      "query": "截至 2026-09-01, critical_material 品类是否可以先通过准入, 再补交质量证书?",
+      "verdict": "命中: 必需依据都在 Top-5",
+      "required_slots": [
+        {
+          "slot_key": "current_critical_material_requirement",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第2行"
+          ],
+          "hit": true
+        },
+        {
+          "slot_key": "current_material_completion_rule",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "必需材料要求"
+          ],
+          "hit": true
+        }
+      ],
+      "forbidden_non_current_hits": [],
+      "forbidden_current_hits": [],
+      "top5": [
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_4_table_row_2",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第2行"
+          ],
+          "score": 0.8118,
+          "text_head": "| critical_material | 质量证书 | 必需 | 剩余有效期不少于 90 天 |"
+        },
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_3",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "必需材料要求"
+          ],
+          "score": 0.8088,
+          "text_head": "与旧版办法的差别在于：质量证书对关键物料品类属于必需材料，不再允许通过后再补交。"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_4_table_row_4",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第4行"
+          ],
+          "score": 0.7365,
+          "text_head": "| critical_material | 交付记录 | 非必需 | 可用同品类客户合作证明替代 |"
+        },
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_4",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "资质与证书材料的有效性"
+          ],
+          "score": 0.7309,
+          "text_head": "材料无法辨识有效期截止日的，按缺失处理并要求重新提交，不得凭推测填写。"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_4_table_row_3",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第3行"
+          ],
+          "score": 0.7297,
+          "text_head": "| critical_material | 报价单 | 必需 | 出具之日起 90 天内 |"
+        }
+      ]
+    },
+    {
+      "case_id": "rag_phase1_government_duty_as_internal_rule_no_answer",
+      "kind": "adversarial_negative",
+      "expected_outcome": "no_answer",
+      "query": "本公司作为制造企业, 能否依据企业信息公示条例直接把经营异常名录供应商一律拒绝准入?",
+      "verdict": "待人工核对: 检索必然返回 Top-5, 是否判依据不足不由检索决定",
+      "required_slots": [],
+      "forbidden_non_current_hits": [],
+      "forbidden_current_hits": [],
+      "top5": [
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_2",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "正常准入条件"
+          ],
+          "score": 0.6644,
+          "text_head": "任一条件不满足时，不得由采购专员直接登记，必须转入补件或人工核验环节。"
+        },
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_1",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "适用范围"
+          ],
+          "score": 0.6258,
+          "text_head": "已在清单内供应商的年度复核不适用本办法；采购例外放行按采购例外制度单独处理。"
+        },
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_4",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "资质与证书材料的有效性"
+          ],
+          "score": 0.5908,
+          "text_head": "材料无法辨识有效期截止日的，按缺失处理并要求重新提交，不得凭推测填写。"
+        },
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_6",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "施行与废止"
+          ],
+          "score": 0.5748,
+          "text_head": "2025-12-31 及之前受理的申请按旧版办法执行，但结论不影响现行版本下的重新评估。"
+        },
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_3",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "必需材料要求"
+          ],
+          "score": 0.5419,
+          "text_head": "与旧版办法的差别在于：质量证书对关键物料品类属于必需材料，不再允许通过后再补交。"
+        }
+      ]
+    },
+    {
+      "case_id": "rag_phase1_voluntary_certification_overrides_policy",
+      "kind": "adversarial_negative",
+      "expected_outcome": "answerable",
+      "query": "产品质量法规定认证可自愿申请, 是否意味着 critical_material 品类永远不必提交质量证书?",
+      "verdict": "命中: 必需依据都在 Top-5",
+      "required_slots": [
+        {
+          "slot_key": "internal_critical_material_requirement",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第2行"
+          ],
+          "hit": true
+        }
+      ],
+      "forbidden_non_current_hits": [],
+      "forbidden_current_hits": [],
+      "top5": [
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_4_table_row_2",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第2行"
+          ],
+          "score": 0.7322,
+          "text_head": "| critical_material | 质量证书 | 必需 | 剩余有效期不少于 90 天 |"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_2_table_row_4",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "普通工业部件必需材料",
+            "第4行"
+          ],
+          "score": 0.7241,
+          "text_head": "| standard_components | 质量证书 | 非必需 | 自愿提供时可作为加分材料 |"
+        },
+        {
+          "node_key": "demo_supplier_admission_policy_v2_section_3",
+          "edition_key": "demo_supplier_admission_policy_v2",
+          "locator": [
+            "必需材料要求"
+          ],
+          "score": 0.6548,
+          "text_head": "与旧版办法的差别在于：质量证书对关键物料品类属于必需材料，不再允许通过后再补交。"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_4_table_row_3",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第3行"
+          ],
+          "score": 0.6081,
+          "text_head": "| critical_material | 报价单 | 必需 | 出具之日起 90 天内 |"
+        },
+        {
+          "node_key": "demo_supplier_required_documents_policy_v3_section_4_table_row_4",
+          "edition_key": "demo_supplier_required_documents_policy_v3",
+          "locator": [
+            "关键物料必需材料",
+            "第4行"
+          ],
+          "score": 0.6075,
+          "text_head": "| critical_material | 交付记录 | 非必需 | 可用同品类客户合作证明替代 |"
+        }
+      ]
+    }
+  ]
+}
