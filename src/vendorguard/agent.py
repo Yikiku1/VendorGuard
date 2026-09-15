@@ -189,8 +189,10 @@ SUBMIT_REPORT_TOOL: ChatCompletionFunctionToolParam = {
         "description": (
             "交付本次审查的结构化报告. 这是唯一的结论出口, 纯文本不算结论. "
             "每条发现要写清结论, 并列出它引用的已核对事实字段与来源定位; "
-            "制度性判断必须引用本次 search_policy 返回的 node_key; "
-            "依据不足时把 insufficient_evidence 设为 true 并在 missing_reason 说明缺哪类依据. "
+            "制度性判断必须引用本次 search_policy 返回的 node_key. "
+            "注意区分两种情况: 材料事实缺字段时不能提交报告, 必须先调用 ask_user 追问; "
+            "制度依据不足 (查不到能支持结论的条款) 才把 insufficient_evidence 设为 true "
+            "并在 missing_reason 说明缺哪类依据. "
             "不得宣告准入批准, 也不得声称系统已写入或更新状态."
         ),
         "parameters": {
@@ -935,7 +937,8 @@ def run_review(
                 try:
                     if checked_result is None:
                         raise ToolArgumentError(
-                            "提交报告前必须先成功执行 check_materials, 且校验结果不能有缺失事实"
+                            "提交报告前必须先成功执行 check_materials, 且校验结果不能有缺失事实; "
+                            "材料事实还缺字段时必须调用 ask_user 向用户追问, 不能先用报告代替"
                         )
                     report = parse_report_arguments(call.function.arguments)
                     verify_report(
@@ -1122,16 +1125,19 @@ def run_review(
                     content=result.model_dump_json(),
                 )
             )
-            messages.append(
-                ChatCompletionUserMessageParam(
-                    role="user",
-                    content=(
-                        "本次工具仅执行只读规则检查, 没有写入案件状态. "
-                        "outcome 中的 action 与 target_case_status 只是建议动作; "
-                        "只能描述为建议, 不得声称系统已经执行、标记或改变案件状态."
-                    ),
-                )
+            reminder = (
+                "本次工具仅执行只读规则检查, 没有写入案件状态. "
+                "outcome 中的 action 与 target_case_status 只是建议动作; "
+                "只能描述为建议, 不得声称系统已经执行、标记或改变案件状态."
             )
+            if result.missing_fields:
+                # 缺材料事实时唯一允许的出口是追问: 在模型刚看到校验结果时就说明,
+                # 别等它先交一份报告再靠拒绝对话把它拉回来 (实测它会反复试报告).
+                reminder += (
+                    f" 校验结果仍缺字段 {result.missing_fields}: "
+                    "下一步必须调用 ask_user 向用户追问这些信息, 不能提交报告, 也不能直接给结论."
+                )
+            messages.append(ChatCompletionUserMessageParam(role="user", content=reminder))
             tool_events.append(
                 {
                     "tool_call_id": call.id,
@@ -1221,6 +1227,21 @@ def load_policy_index(
         raise AgentConfigError(f"正文向量缓存不可用: {exc}") from exc
 
     return PolicyIndex(records=records, vectors=vectors, model=model)
+
+
+def _print_report(report: ReviewReport) -> None:
+    """打印结构化报告的结论与它引用的来源, 供人工复核 (CLI 是唯一入口)."""
+
+    for number, finding in enumerate(report.findings, start=1):
+        print(f"  [{number}] {finding.summary}")
+        if finding.fact_fields:
+            print(f"      事实: {', '.join(finding.fact_fields)}")
+        if finding.material_sources:
+            print(f"      材料来源: {', '.join(finding.material_sources)}")
+        if finding.policy_citations:
+            print(f"      制度引用: {', '.join(finding.policy_citations)}")
+    if report.notes:
+        print(f"  备注: {report.notes}")
 
 
 def write_run_log(
@@ -1339,19 +1360,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         reference_date=reference_date,
     )
     labels = {"answer": "检查结论", "question": "追问", "failed": "运行失败"}
-    print(f"[{labels[outcome.kind]}] {outcome.text}")
-    if outcome.report is not None:
-        # 报告是本次运行的正式交付物: 逐条打印结论与它引用的来源
-        for index, finding in enumerate(outcome.report.findings, start=1):
-            print(f"  [{index}] {finding.summary}")
-            if finding.fact_fields:
-                print(f"      事实: {', '.join(finding.fact_fields)}")
-            if finding.material_sources:
-                print(f"      材料来源: {', '.join(finding.material_sources)}")
-            if finding.policy_citations:
-                print(f"      制度引用: {', '.join(finding.policy_citations)}")
-        if outcome.report.notes:
-            print(f"  备注: {outcome.report.notes}")
+
+    def show(result: AgentRunOutcome) -> None:
+        """打印一轮的结论与它的报告: 补充后的第二轮也要走同一段渲染."""
+
+        print(f"[{labels[result.kind]}] {result.text}")
+        if result.report is not None:
+            _print_report(result.report)
+
+    show(outcome)
     if outcome.kind == "question":
         # M2 只接受一次补充: 回答登记为来源后, 在同一会话里重新读取与校验
         answer = input("请补充(直接回车放弃): ").strip()
@@ -1367,7 +1384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 model_name=settings.model_name,
                 reference_date=reference_date,
             )
-            print(f"[{labels[outcome.kind]}] {outcome.text}")
+            show(outcome)
     for event in outcome.tool_events:
         if event["name"] == "check_materials" and event["status"] == "ok":
             raw = json.dumps(event["detail"], ensure_ascii=False)

@@ -2057,3 +2057,212 @@ def test_run_log_records_the_report(policy, tmp_path) -> None:
     assert payload["report"]["material_id"] == "license_complete"
     assert payload["report"]["findings"][0]["material_sources"] == ["license_complete@page:1"]
     assert payload["report"]["insufficient_evidence"] is False
+
+
+# ---------------------------------------------------------------------------
+# M3-6: 一次补充之后, 第二轮是独立的一次运行
+# ---------------------------------------------------------------------------
+
+
+def missing_date_round(policy, session, client, index=None):
+    """跑第一轮: 读材料 -> 校验(缺日期) -> 追问, 返回产出."""
+
+    return run_review(
+        "请检查",
+        session=session,
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+        policy_index=index,
+    )
+
+
+def test_second_round_cannot_cite_first_round_nodes(policy) -> None:
+    """第一轮检索到的节点不能当第二轮的依据: 节点登记只在那一次运行内有效."""
+
+    index = policy_index()
+    session = ReviewSession.start(material())
+    first = missing_date_round(
+        policy,
+        session,
+        FakeClient(
+            [
+                read_response(),
+                tool_call_response(check_arguments(valid_until=None), call_id="call_check_1"),
+                search_response(call_id="call_search_1"),
+                ask_user_response("请提供营业执照有效期截止日?", call_id="call_ask_1"),
+            ]
+        ),
+        index,
+    )
+
+    assert first.kind == "question"
+    first_round_node = index.records[0].node_key
+    searched = [event for event in first.tool_events if event["name"] == "search_policy"]
+    # 第一轮检索真实返回过这个节点, 所以它在第一轮是可引用的
+    assert first_round_node in searched[0]["detail"]["returned_nodes"]
+
+    session.record_supplement("补充说明: 营业执照有效期至 2030年01月31日")
+    second = run_review(
+        "请检查",
+        session=session,
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=FakeClient(
+            [
+                read_response(call_id="call_read_2"),
+                tool_call_response(
+                    check_arguments(
+                        valid_until="2030-01-31", date_source="user_supplement@round:1"
+                    ),
+                    call_id="call_check_2",
+                ),
+                report_response(
+                    call_id="call_report_2",
+                    # 事实与来源都照第二轮的核对结果写, 只把制度引用换掉:
+                    # 这样被拒的原因只能是引用不在本次检索结果里
+                    material_sources=("user_supplement@round:1", "license_complete@page:1"),
+                    policy_citations=(first_round_node,),
+                ),
+            ]
+        ),
+        policy_index=index,
+    )
+
+    assert second.kind == "failed"
+    assert second.report is None
+    assert "不是本次检索返回过的节点" in second.tool_events[-1]["detail"]
+
+
+def test_second_round_can_cite_its_own_nodes(policy) -> None:
+    """第二轮的结论只引用它自己检索到的节点时才通过."""
+
+    index = policy_index()
+    session = ReviewSession.start(material())
+    missing_date_round(
+        policy,
+        session,
+        FakeClient(
+            [
+                read_response(),
+                tool_call_response(check_arguments(valid_until=None), call_id="call_check_1"),
+                search_response(call_id="call_search_1"),
+                ask_user_response("请提供营业执照有效期截止日?", call_id="call_ask_1"),
+            ]
+        ),
+        index,
+    )
+    session.record_supplement("补充说明: 营业执照有效期至 2030年01月31日")
+
+    second_client = FakeClient(
+        [
+            read_response(call_id="call_read_2"),
+            tool_call_response(
+                check_arguments(valid_until="2030-01-31", date_source="user_supplement@round:1"),
+                call_id="call_check_2",
+            ),
+            search_response(call_id="call_search_2"),
+            report_response(
+                call_id="call_report_2",
+                material_sources=("user_supplement@round:1", "license_complete@page:1"),
+                policy_citations=(index.records[1].node_key,),
+            ),
+        ]
+    )
+    second = run_review(
+        "请检查",
+        session=session,
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=second_client,
+        policy_index=index,
+    )
+
+    assert second.kind == "answer"
+    assert second.report is not None
+    assert second.report.findings[0].policy_citations == (index.records[1].node_key,)
+    # 第二轮的检索结果只登记在第二轮: 事件里能看到两个不同的节点
+    second_search = next(event for event in second.tool_events if event["name"] == "search_policy")
+    assert second_search["detail"]["returned_nodes"] == [item.node_key for item in index.records]
+
+
+def test_second_round_must_check_again(policy) -> None:
+    """第二轮不能沿用第一轮的校验结果: 没重新校验就交报告会被拒."""
+
+    session = ReviewSession.start(material())
+    missing_date_round(
+        policy,
+        session,
+        FakeClient(
+            [
+                read_response(),
+                tool_call_response(check_arguments(valid_until=None), call_id="call_check_1"),
+                ask_user_response("请提供营业执照有效期截止日?", call_id="call_ask_1"),
+            ]
+        ),
+    )
+    session.record_supplement("补充说明: 营业执照有效期至 2030年01月31日")
+
+    second = run_review(
+        "请检查",
+        session=session,
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=FakeClient([report_response(call_id="call_report_2")]),
+    )
+
+    assert second.kind == "failed"
+    assert second.report is None
+    assert second.tool_events[0]["status"] == "error"
+    assert "check_materials" in second.tool_events[0]["detail"]
+
+
+def test_second_round_replays_the_supplement_as_a_source(policy) -> None:
+    """第二轮的开场消息带上补充原文与它的来源定位, 模型据此核对事实."""
+
+    session = ReviewSession.start(material())
+    session.record_supplement("补充说明: 营业执照有效期至 2030年01月31日")
+
+    client = FakeClient([ask_user_response("还需要别的材料吗?", call_id="call_ask_9")])
+    run_review(
+        "请检查",
+        session=session,
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    opening = client.completions.calls[0]["messages"][1]["content"]
+    assert "user_supplement@round:1" in opening
+    assert "2030年01月31日" in opening
+    # 第二轮不携带上一轮的检索结果: 开场里不出现任何节点键
+    assert "node_key" not in opening
+    assert "section_" not in opening
+
+
+def test_missing_fields_reminder_names_the_only_way_out(policy) -> None:
+    """校验缺字段时, 下一步的提醒必须点名 ask_user: 实测模型会反复去交报告."""
+
+    client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(check_arguments(valid_until=None), call_id="call_check_1"),
+            ask_user_response("请提供营业执照有效期截止日?", call_id="call_ask_1"),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    assert outcome.kind == "question"
+    # 校验结果之后紧跟的那条 user 提醒: 既讲只读, 也讲缺字段只能追问
+    reminder = client.completions.calls[2]["messages"][-1]
+    assert reminder["role"] == "user"
+    assert "business_license_valid_until" in reminder["content"]
+    assert "ask_user" in reminder["content"]
+    assert "不能提交报告" in reminder["content"]
