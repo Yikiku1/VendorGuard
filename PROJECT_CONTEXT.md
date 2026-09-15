@@ -1,6 +1,6 @@
 # VendorGuard 当前上下文
 
-> 更新：2026-09-15。M2 已完成，M3 方案已定义、实现未开始；项目定位为 AI Agent / AI 应用开发求职。
+> 更新：2026-09-15。M2 已完成，M3 已进入实现（M3-1 完成）；项目定位为 AI Agent / AI 应用开发求职。
 
 ## 当前定位与入口
 
@@ -27,6 +27,7 @@ VendorGuard 是供应商材料审查 Agent：用户提交材料，Agent 调用�
 | RAG 持久化 | `evidence/models.py`、迁移 `b0604f36e9a4` 已存在，包含四层实体和版本关联表；本轮开始时两者尚未提交，`alembic/env.py` 也有已有改动 |
 | Agent M1 | `agent.py` 与 `agent_tools.py` 已实现真实模型工具循环；预算、错误纠正和脱敏记录机制仍在使用，M1 的快照事实入口（`parse_tool_arguments` / `check_materials`）已删除 |
 | Agent M2 材料输入 | `materials.py` 逐页读取文本 PDF（失败码 `file_not_found`、`not_a_pdf`、`scanned_pdf_unsupported`、`empty_material`）并提供来源核对 `MaterialSources`；`agent_tools.py` 的提取事实管线在规则执行前核对来源、由程序派生执照状态；`agent.py` 的循环先 `read_material` 再 `check_materials`；`agent_session.py` 持有材料与用户补充，支持一次补充闭环。三份自制样例与生成脚本在 `data/demo/materials/`、`scripts/make_demo_materials.py` |
+| Agent M3 制度片段 | `retrieval/chunk_list.py` 从冻结语料生成现行两份制度的 22 条片段并落盘 `data/retrieval/chunks_v1.jsonl`，每条可用 `node_key`、定位路径、字符区间与两份哈希回指解析器节点和归一化正文；候选范围由代码白名单 `CURRENT_EDITION_KEYS` 限定，旧版与外部法规留在仓库作负例。构建入口是 `scripts/build_chunk_list.py`；embedding、向量检索与带引用报告尚未实现 |
 | 后续产品链路 | 制度检索、带引用报告和前端尚未实现；跨轮对话只支持一次补充，未做长期会话管理 |
 
 当前案件评估中的正常路径仍停在 `analyzing`，补件路径可到 `pending_documents`；已有人工决定接口不等于端到端审批已跑通。Agent 初审报告不依赖推进这些业务状态，也不能把报告确认写成供应商准入批准。
@@ -51,6 +52,8 @@ VendorGuard 是供应商材料审查 Agent：用户提交材料，Agent 调用�
 
 2026-09-14：M2 完成（M2-0 至 M2-5）。`agent.py` 保留唯一循环与唯一 CLI，CLI 现在接收材料 PDF 并可传 `--reference-date`；`agent_session.py` 支持一次补充闭环；全量单测 247 通过，Ruff、格式检查与 mypy 全绿（Docker 未启动，集成测试未跑，本轮改动不涉及数据库）。真实模型记录在 `logs/agent-runs/`：完整样例 3 次全过，扫描件在材料层被拒且未发模型请求，缺日期样例 3 次里 1 次走完闭环、2 次为模型波动（耗尽纠正预算后失败、以及补充后仍选择追问），两次都按“模型行为方差、边界未放行”记入开发计划的已知限制。
 
-2026-09-15：M3 方案修订，实现未开始。当前唯一小功能是 M3-1：两份现行制度的 22 条片段清单落盘并回指可引用节点；详细接口、步骤与验收清单见 [M3 实施方案](project_docs/VendorGuard-M3实施方案.md)。全量 274 条仅作为已有解析器的实测基线；旧版与外部法规元数据用于过滤负例测试，不生成本期负例向量。查询向量与正文缓存同维校验，制度引用回指本次检索实际返回的 `KnowledgeNode`；报告的结构化事实字段和规则结果对应本次成功的 `check_materials`，自由文本是否受来源支持仍由案例人工核对。补充后重新检索。BM25 与全量索引只在闭环后针对具体漏检单独考虑；M3 仍不访问数据库、不用 MinerU 一类版面解析、不新增领域实体。
+2026-09-15：M3 方案修订并提交（`8fa46cc`），M3-0 基线复核通过，M3-1 完成。当前唯一小功能是 M3-2：embedding 客户端与本地缓存；详细接口、步骤与验收清单见 [M3 实施方案](project_docs/VendorGuard-M3实施方案.md)。全量 274 条仅作为已有解析器的实测基线；旧版与外部法规元数据用于过滤负例测试，不生成本期负例向量。查询向量与正文缓存同维校验，制度引用回指本次检索实际返回的 `KnowledgeNode`；报告的结构化事实字段和规则结果对应本次成功的 `check_materials`，自由文本是否受来源支持仍由案例人工核对。补充后重新检索。BM25 与全量索引只在闭环后针对具体漏检单独考虑；M3 仍不访问数据库、不用 MinerU 一类版面解析、不新增领域实体。
+
+M3-0 复核为 247 项单测与 Ruff、格式检查、mypy 全绿，提交三份文档后工作区无其它改动。M3-1 完成后新增 `retrieval/chunk_list.py` 与 `scripts/build_chunk_list.py`，清单落盘 22 行 / 27037 字节（6 + 16，sha256 `45b39ff0…`）；新增 11 项单测，全量单测 258 通过，Ruff、格式检查与 mypy 全绿（本步不涉及数据库，集成测试未跑）。
 
 里程碑进度仅在 [Agent 开发计划](project_docs/VendorGuard-Agent开发计划.md) 更新，避免再维护多套看板。
