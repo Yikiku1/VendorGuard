@@ -33,8 +33,14 @@ from openai.types.chat import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
+from .agent_report import ReviewReport, parse_report_arguments, verify_report
 from .agent_session import ReviewSession
-from .agent_tools import ToolArgumentError, check_extracted_facts, parse_extracted_facts
+from .agent_tools import (
+    ExtractedCheckResult,
+    ToolArgumentError,
+    check_extracted_facts,
+    parse_extracted_facts,
+)
 from .config import load_settings
 from .materials import (
     MaterialDocument,
@@ -69,6 +75,11 @@ SYSTEM_PROMPT = (
     "node_key 与原文, chunk_key 只是召回编号, 不得当作引用标识; "
     "检索不到相关条款时必须说明依据不足, 不得凭记忆引用制度, 也不得把相似度高的"
     "片段当成结论已成立的证据; 只能检索现行版本, 不得要求回放历史版本. "
+    "检查结论只能通过 submit_report 交付结构化报告, 纯文本不算结论: "
+    "每条发现要写清结论并列出依据的已核对事实与来源定位, 制度性判断必须引用"
+    "本次检索返回的 node_key; 依据不足时把 insufficient_evidence 设为 true 并在 "
+    "missing_reason 说明缺少哪类依据, 不得硬答. "
+    "不得宣告准入批准或审批通过, 不得声称系统已写入或更新状态. "
     "需要向用户提问或说明无法回答时, 必须调用 ask_user 工具, 纯文本不能作为追问出口; "
     "追问中不得宣告批准, 已完成审批或检查结论. "
     "若用户问题超出材料准入检查范围(如交付率), 只能说明当前仅支持材料准入检查, "
@@ -166,6 +177,86 @@ SEARCH_POLICY_TOOL: ChatCompletionFunctionToolParam = {
                 },
             },
             "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+SUBMIT_REPORT_TOOL: ChatCompletionFunctionToolParam = {
+    "type": "function",
+    "function": {
+        "name": "submit_report",
+        "description": (
+            "交付本次审查的结构化报告. 这是唯一的结论出口, 纯文本不算结论. "
+            "每条发现要写清结论, 并列出它引用的已核对事实字段与来源定位; "
+            "制度性判断必须引用本次 search_policy 返回的 node_key; "
+            "依据不足时把 insufficient_evidence 设为 true 并在 missing_reason 说明缺哪类依据. "
+            "不得宣告准入批准, 也不得声称系统已写入或更新状态."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "material_id": {
+                    "type": "string",
+                    "description": "本次审查的材料 ID, 由程序给出",
+                },
+                "findings": {
+                    "type": "array",
+                    "description": "发现列表; insufficient_evidence 为 true 时允许为空",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "summary": {"type": "string", "description": "这一条发现的结论"},
+                            "fact_fields": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "这条结论依据的已核对事实字段名",
+                            },
+                            "rule_results": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "rule_id": {"type": "string"},
+                                        "result": {
+                                            "type": "string",
+                                            "enum": ["hit", "not_hit", "not_applicable"],
+                                        },
+                                    },
+                                    "required": ["rule_id", "result"],
+                                    "additionalProperties": False,
+                                },
+                                "description": "这次结论引用的规则结果, 必须与本次校验一致",
+                            },
+                            "material_sources": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "材料来源定位, 形如 材料ID@page:N",
+                            },
+                            "policy_citations": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "制度引用, 只能填本次检索返回的 node_key",
+                            },
+                        },
+                        "required": ["summary"],
+                        "additionalProperties": False,
+                    },
+                },
+                "insufficient_evidence": {
+                    "type": "boolean",
+                    "description": "依据不足时为 true, 并在 missing_reason 说明缺什么",
+                },
+                "missing_reason": {
+                    "type": "string",
+                    "description": "无法得出的结论以及缺少哪类依据",
+                },
+                "notes": {
+                    "type": "string",
+                    "description": "补充说明, 例如规则未命中不等于准入批准",
+                },
+            },
+            "required": ["material_id", "findings"],
             "additionalProperties": False,
         },
     },
@@ -320,6 +411,7 @@ class AgentRunOutcome(BaseModel):
     material_sha256: str = ""
     reference_date: str = ""
     supplement_rounds: int = 0
+    report: ReviewReport | None = None
 
 
 def _redact_secret(text: str) -> str:
@@ -370,6 +462,7 @@ def run_review(
     ]
     read_done = False
     checked_ok = False
+    checked_result: ExtractedCheckResult | None = None
     needs_followup = False
     model_requests = 0
     tool_attempts = 0
@@ -382,7 +475,11 @@ def run_review(
     # 报告里的制度引用必须落在这份集合里, 模型编不出没检索到的节点.
     returned_nodes: dict[str, RetrievedChunk] = {}
 
-    def finish(kind: Literal["answer", "question", "failed"], text: str) -> AgentRunOutcome:
+    def finish(
+        kind: Literal["answer", "question", "failed"],
+        text: str,
+        report: ReviewReport | None = None,
+    ) -> AgentRunOutcome:
         return AgentRunOutcome(
             kind=kind,
             text=_redact_secret(text),
@@ -398,6 +495,7 @@ def run_review(
             material_sha256=material.sha256,
             reference_date=reference_date.isoformat(),
             supplement_rounds=session.supplement_rounds,
+            report=report,
         )
 
     while True:
@@ -416,6 +514,7 @@ def run_review(
                     READ_MATERIAL_TOOL,
                     CHECK_MATERIALS_TOOL,
                     SEARCH_POLICY_TOOL,
+                    SUBMIT_REPORT_TOOL,
                     ASK_USER_TOOL,
                 ],
                 timeout=min(request_timeout, max(remaining, 0.001)),
@@ -452,8 +551,6 @@ def run_review(
                 return finish("failed", f"回答被截断或过滤: {completion.choices[0].finish_reason}")
             if not text:
                 return finish("failed", "模型返回空回答")
-            if checked_ok:
-                return finish("answer", text)
             if needs_followup:
                 correction_detail = "校验结果仍有缺失事实, 追问必须调用 ask_user"
                 exhausted_text = "校验结果仍有缺失事实, 且模型未调用 ask_user"
@@ -461,10 +558,10 @@ def run_review(
                     "校验结果包含 missing_fields; 必须调用 ask_user 提出一个补充信息问题."
                 )
             else:
-                correction_detail = "纯文本不能作为结论或追问出口"
-                exhausted_text = "未调用工具就给出结论, 且纠正机会已用尽"
+                correction_detail = "检查结论只能通过 submit_report 交付, 纯文本不算结论"
+                exhausted_text = "未调用 submit_report 就给出结论, 且纠正机会已用尽"
                 correction_message = (
-                    "检查结论必须来自 check_materials 工具结果, 且校验结果不能有缺失事实; "
+                    "检查结论必须调用 submit_report 交付结构化报告; "
                     "若需要向用户提问, 请调用 ask_user 工具."
                 )
             if corrections_used >= 1:
@@ -570,6 +667,7 @@ def run_review(
                 "read_material",
                 "check_materials",
                 "search_policy",
+                "submit_report",
                 "ask_user",
             ):
                 if corrections_used >= 1:
@@ -833,6 +931,67 @@ def run_review(
                 )
                 continue
 
+            if call.function.name == "submit_report":
+                try:
+                    if checked_result is None:
+                        raise ToolArgumentError(
+                            "提交报告前必须先成功执行 check_materials, 且校验结果不能有缺失事实"
+                        )
+                    report = parse_report_arguments(call.function.arguments)
+                    verify_report(
+                        report,
+                        material_id=material.material_id,
+                        checked_facts=checked_result.verified_sources,
+                        check_result=checked_result,
+                        returned_nodes=returned_nodes,
+                    )
+                except ToolArgumentError as exc:
+                    if corrections_used >= 1:
+                        tool_events.append(
+                            {
+                                "tool_call_id": call.id,
+                                "name": "submit_report",
+                                "status": "error",
+                                "detail": f"纠正机会已用尽, 报告仍然不合格: {exc}",
+                                "assistant_content": (message.content or "")[:200],
+                                "arguments": call.function.arguments,
+                            }
+                        )
+                        return finish("failed", f"纠正机会已用尽, 报告仍然不合格: {exc}")
+                    corrections_used += 1
+                    messages.append(
+                        ChatCompletionToolMessageParam(
+                            role="tool",
+                            tool_call_id=call.id,
+                            content=json.dumps({"error": str(exc)}, ensure_ascii=False),
+                        )
+                    )
+                    tool_events.append(
+                        {
+                            "tool_call_id": call.id,
+                            "name": "submit_report",
+                            "status": "error",
+                            "detail": str(exc),
+                            "assistant_content": (message.content or "")[:200],
+                            "arguments": call.function.arguments,
+                        }
+                    )
+                    continue
+
+                tool_events.append(
+                    {
+                        "tool_call_id": call.id,
+                        "name": "submit_report",
+                        "status": "ok",
+                        "detail": report.model_dump(),
+                        "arguments": call.function.arguments,
+                    }
+                )
+                summary = f"已交付结构化报告, 共 {len(report.findings)} 条发现"
+                if report.insufficient_evidence:
+                    summary = f"{summary}; 依据不足: {report.missing_reason}"
+                return finish("answer", summary, report)
+
             try:
                 facts = parse_extracted_facts(call.function.arguments)
             except ToolArgumentError as exc:
@@ -954,6 +1113,8 @@ def run_review(
 
             checked_ok = not result.missing_fields
             needs_followup = bool(result.missing_fields)
+            if checked_ok:
+                checked_result = result
             messages.append(
                 ChatCompletionToolMessageParam(
                     role="tool",
@@ -1098,6 +1259,7 @@ def write_run_log(
             "completion_tokens": outcome.completion_tokens,
         },
         "tool_events": outcome.tool_events,
+        "report": outcome.report.model_dump() if outcome.report is not None else None,
     }
     path = log_dir / f"{started_at:%Y%m%dT%H%M%S%f}.json"
     raw_json = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -1176,8 +1338,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_name=settings.model_name,
         reference_date=reference_date,
     )
-    labels = {"answer": "检查说明", "question": "追问", "failed": "运行失败"}
+    labels = {"answer": "检查结论", "question": "追问", "failed": "运行失败"}
     print(f"[{labels[outcome.kind]}] {outcome.text}")
+    if outcome.report is not None:
+        # 报告是本次运行的正式交付物: 逐条打印结论与它引用的来源
+        for index, finding in enumerate(outcome.report.findings, start=1):
+            print(f"  [{index}] {finding.summary}")
+            if finding.fact_fields:
+                print(f"      事实: {', '.join(finding.fact_fields)}")
+            if finding.material_sources:
+                print(f"      材料来源: {', '.join(finding.material_sources)}")
+            if finding.policy_citations:
+                print(f"      制度引用: {', '.join(finding.policy_citations)}")
+        if outcome.report.notes:
+            print(f"  备注: {outcome.report.notes}")
     if outcome.kind == "question":
         # M2 只接受一次补充: 回答登记为来源后, 在同一会话里重新读取与校验
         answer = input("请补充(直接回车放弃): ").strip()
