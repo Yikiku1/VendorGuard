@@ -1,3 +1,4 @@
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -18,6 +19,27 @@ def test_load_settings_uses_safe_defaults() -> None:
     assert settings.db_name == "vendorguard"
     assert settings.db_user == "vendorguard"
     assert settings.db_password is None
+
+
+def test_load_settings_defaults_retrieval_embedding_configuration() -> None:
+    """M3 检索配置有可用默认值: 探针确认过的模型名与正文向量缓存位置."""
+
+    settings = load_settings(env_file=None)
+
+    assert settings.embedding_model == "qwen3.7-text-embedding"
+    assert settings.embedding_cache_path == Path("data/retrieval/cache/embedding_v1.json")
+
+
+def test_load_settings_reads_retrieval_embedding_overrides(monkeypatch: MonkeyPatch) -> None:
+    """两个配置项都能被环境变量覆盖, 名字要与 .env.example 一致."""
+
+    monkeypatch.setenv("VENDORGUARD_EMBEDDING_MODEL", "qwen3.7-other-embedding")
+    monkeypatch.setenv("VENDORGUARD_EMBEDDING_CACHE_PATH", "logs/other_vectors.json")
+
+    settings = load_settings(env_file=None)
+
+    assert settings.embedding_model == "qwen3.7-other-embedding"
+    assert settings.embedding_cache_path == Path("logs/other_vectors.json")
 
 
 def test_load_settings_ignores_unprefixed_environment_variables(

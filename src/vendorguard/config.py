@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     demo_specialist_password: SecretStr | None = None
     demo_manager_password: SecretStr | None = None
 
+    # 制度检索的 embedding 配置: 模型名与正文向量缓存位置。
+    # 缓存是调用付费接口算出的派生物, 不入库, 指纹不符时整份重建。
+    embedding_model: str = "qwen3.7-text-embedding"
+    embedding_cache_path: Path = Path("data/retrieval/cache/embedding_v1.json")
+
 
 def load_settings(*, env_file: str | Path | None = ".env") -> Settings:
     """从环境变量和可选的 dotenv 文件加载配置。"""
