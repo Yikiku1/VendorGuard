@@ -27,7 +27,7 @@ VendorGuard 是供应商材料审查 Agent：用户提交材料，Agent 调用�
 | RAG 持久化 | `evidence/models.py`、迁移 `b0604f36e9a4` 已存在，包含四层实体和版本关联表；本轮开始时两者尚未提交，`alembic/env.py` 也有已有改动 |
 | Agent M1 | `agent.py` 与 `agent_tools.py` 已实现真实模型工具循环；预算、错误纠正和脱敏记录机制仍在使用，M1 的快照事实入口（`parse_tool_arguments` / `check_materials`）已删除 |
 | Agent M2 材料输入 | `materials.py` 逐页读取文本 PDF（失败码 `file_not_found`、`not_a_pdf`、`scanned_pdf_unsupported`、`empty_material`）并提供来源核对 `MaterialSources`；`agent_tools.py` 的提取事实管线在规则执行前核对来源、由程序派生执照状态；`agent.py` 的循环先 `read_material` 再 `check_materials`；`agent_session.py` 持有材料与用户补充，支持一次补充闭环。三份自制样例与生成脚本在 `data/demo/materials/`、`scripts/make_demo_materials.py` |
-| Agent M3 制度片段 | `retrieval/chunk_list.py` 从冻结语料生成现行两份制度的 22 条片段并落盘 `data/retrieval/chunks_v1.jsonl`，每条可用 `node_key`、定位路径、字符区间与两份哈希回指解析器节点和归一化正文；候选范围由代码白名单 `CURRENT_EDITION_KEYS` 限定，旧版与外部法规留在仓库作负例。构建入口是 `scripts/build_chunk_list.py`；embedding、向量检索与带引用报告尚未实现 |
+| Agent M3 制度片段 | `retrieval/chunk_list.py` 从冻结语料生成现行两份制度的 22 条片段并落盘 `data/retrieval/chunks_v1.jsonl`，每条可用 `node_key`、定位路径、字符区间与两份哈希回指解析器节点和归一化正文；候选范围由代码白名单 `CURRENT_EDITION_KEYS` 限定，旧版与外部法规留在仓库作负例。构建入口是 `scripts/build_chunk_list.py`。`retrieval/embedding.py`（正文向量缓存与查询向量）与 `config.py` 的两个检索配置项已写好测试与实现、待粘贴；向量检索与带引用报告尚未实现 |
 | 后续产品链路 | 制度检索、带引用报告和前端尚未实现；跨轮对话只支持一次补充，未做长期会话管理 |
 
 当前案件评估中的正常路径仍停在 `analyzing`，补件路径可到 `pending_documents`；已有人工决定接口不等于端到端审批已跑通。Agent 初审报告不依赖推进这些业务状态，也不能把报告确认写成供应商准入批准。
@@ -55,5 +55,9 @@ VendorGuard 是供应商材料审查 Agent：用户提交材料，Agent 调用�
 2026-09-15：M3 方案修订并提交（`8fa46cc`），M3-0 基线复核通过，M3-1 完成。当前唯一小功能是 M3-2：embedding 客户端与本地缓存；详细接口、步骤与验收清单见 [M3 实施方案](project_docs/VendorGuard-M3实施方案.md)。全量 274 条仅作为已有解析器的实测基线；旧版与外部法规元数据用于过滤负例测试，不生成本期负例向量。查询向量与正文缓存同维校验，制度引用回指本次检索实际返回的 `KnowledgeNode`；报告的结构化事实字段和规则结果对应本次成功的 `check_materials`，自由文本是否受来源支持仍由案例人工核对。补充后重新检索。BM25 与全量索引只在闭环后针对具体漏检单独考虑；M3 仍不访问数据库、不用 MinerU 一类版面解析、不新增领域实体。
 
 M3-0 复核为 247 项单测与 Ruff、格式检查、mypy 全绿，提交三份文档后工作区无其它改动。M3-1 完成后新增 `retrieval/chunk_list.py` 与 `scripts/build_chunk_list.py`，清单落盘 22 行 / 27037 字节（6 + 16，sha256 `45b39ff0…`）；新增 11 项单测，全量单测 258 通过，Ruff、格式检查与 mypy 全绿（本步不涉及数据库，集成测试未跑）。
+
+2026-09-15 M3-2 探针与验证：探针 `scripts/probe_embedding.py` 一次真实调用确认 `qwen3.7-text-embedding` 可用、1024 维、返回向量已 L2 归一（范数 1.000000）、响应带 `index` 且与输入同序；单次输入上限 20 条（21 条被服务端 400 拒绝）。由此新增 `retrieval/embedding.py`（正文分批 ≤20、按 `index` 回映射、维度/有限值/单位范数校验、缓存按"模型名 + 正文指纹"整体失效、查询向量不进缓存）、`config.py` 的 `embedding_model` 与 `embedding_cache_path`、`.env.example` 与 `.gitignore` 对应条目，并加入 `numpy` 依赖；聚焦测试 18 项全用替身、不打网络。临时落盘实测：22 条正文 2 次请求建成缓存（约 499 KB），二次运行 0 次新请求且向量逐分量一致，查询向量 1024 维；全量单测 278 通过，Ruff、格式检查与 mypy 全绿。实现待开发者粘贴后判绿。
+
+补一条影响后续口径的实测：同一批正文两次独立构建的向量并非逐分量相同（22528 个分量中 7168 个有差异，最大 2.0e-4），所以"同一查询的 Top-5 可复现"只能绑定固定的缓存文件，不能宣称模型输出稳定；缓存同时承担"冻结向量"作用。
 
 里程碑进度仅在 [Agent 开发计划](project_docs/VendorGuard-Agent开发计划.md) 更新，避免再维护多套看板。
