@@ -27,7 +27,7 @@ VendorGuard 是供应商材料审查 Agent：用户提交材料，Agent 调用�
 | RAG 持久化 | `evidence/models.py`、迁移 `b0604f36e9a4` 已存在，包含四层实体和版本关联表；本轮开始时两者尚未提交，`alembic/env.py` 也有已有改动 |
 | Agent M1 | `agent.py` 与 `agent_tools.py` 已实现真实模型工具循环；预算、错误纠正和脱敏记录机制仍在使用，M1 的快照事实入口（`parse_tool_arguments` / `check_materials`）已删除 |
 | Agent M2 材料输入 | `materials.py` 逐页读取文本 PDF（失败码 `file_not_found`、`not_a_pdf`、`scanned_pdf_unsupported`、`empty_material`）并提供来源核对 `MaterialSources`；`agent_tools.py` 的提取事实管线在规则执行前核对来源、由程序派生执照状态；`agent.py` 的循环先 `read_material` 再 `check_materials`；`agent_session.py` 持有材料与用户补充，支持一次补充闭环。三份自制样例与生成脚本在 `data/demo/materials/`、`scripts/make_demo_materials.py` |
-| Agent M3 制度检索 | `retrieval/chunk_list.py` 从冻结语料生成现行两份制度的 22 条片段并落盘 `data/retrieval/chunks_v1.jsonl`，每条可用 `node_key`、定位路径、字符区间与两份哈希回指解析器节点和归一化正文；候选范围由代码白名单 `CURRENT_EDITION_KEYS` 限定，旧版与外部法规留在仓库作负例，构建入口 `scripts/build_chunk_list.py`。`retrieval/embedding.py` 按 20 条分批生成正文向量并缓存到 `data/retrieval/cache/`（gitignore 不入库），缓存按"模型名 + 正文指纹"整体失效，查询向量不入缓存，构建入口 `scripts/build_embedding_cache.py`；向量检索与带引用报告尚未实现 |
+| Agent M3 制度检索 | `retrieval/chunk_list.py` 从冻结语料生成现行两份制度的 22 条片段并落盘 `data/retrieval/chunks_v1.jsonl`，每条可用 `node_key`、定位路径、字符区间与两份哈希回指解析器节点和归一化正文；候选范围由代码白名单 `CURRENT_EDITION_KEYS` 限定，旧版与外部法规留在仓库作负例，构建入口 `scripts/build_chunk_list.py`。`retrieval/embedding.py` 按 20 条分批生成正文向量并缓存到 `data/retrieval/cache/`（gitignore 不入库），缓存按"模型名 + 正文指纹"整体失效，查询向量不入缓存，构建入口 `scripts/build_embedding_cache.py`。`retrieval/search.py`（先按白名单过滤再算精确 cosine、Top-5、同分按 `chunk_key`；参数错误抛 `QueryError`、配置失败抛 `SearchError`）与 `scripts/preview_search.py` 待粘贴；带引用报告尚未实现 |
 | 后续产品链路 | 制度检索、带引用报告和前端尚未实现；跨轮对话只支持一次补充，未做长期会话管理 |
 
 当前案件评估中的正常路径仍停在 `analyzing`，补件路径可到 `pending_documents`；已有人工决定接口不等于端到端审批已跑通。Agent 初审报告不依赖推进这些业务状态，也不能把报告确认写成供应商准入批准。
@@ -59,5 +59,7 @@ M3-0 复核为 247 项单测与 Ruff、格式检查、mypy 全绿，提交三份
 2026-09-15 M3-2 探针与验证：探针 `scripts/probe_embedding.py` 一次真实调用确认 `qwen3.7-text-embedding` 可用、1024 维、返回向量已 L2 归一（范数 1.000000）、响应带 `index` 且与输入同序；单次输入上限 20 条（21 条被服务端 400 拒绝）。由此新增 `retrieval/embedding.py`（正文分批 ≤20、按 `index` 回映射、维度/有限值/单位范数校验、缓存按"模型名 + 正文指纹"整体失效、查询向量不进缓存）、`config.py` 的 `embedding_model` 与 `embedding_cache_path`、`.env.example` 与 `.gitignore` 对应条目，并加入 `numpy` 依赖；聚焦测试 18 项全用替身、不打网络。临时落盘实测：22 条正文 2 次请求建成缓存（约 499 KB），二次运行 0 次新请求且向量逐分量一致，查询向量 1024 维；全量单测 278 通过，Ruff、格式检查与 mypy 全绿。开发者粘贴后已在仓库跑绿：`scripts/build_embedding_cache.py` 首次 2 次调用（20 + 2 分批）建成 `data/retrieval/cache/embedding_v1.json`（499719 字节，gitignore 不入库），二次 0 次调用复用；全量单测 278 通过。
 
 补一条影响后续口径的实测：同一批正文两次独立构建的向量并非逐分量相同（22528 个分量中 7168 个有差异，最大 2.0e-4），所以"同一查询的 Top-5 可复现"只能绑定固定的缓存文件，不能宣称模型输出稳定；缓存同时承担"冻结向量"作用。
+
+2026-09-15 M3-3 测试与验证：`retrieval/search.py` 先按现行白名单过滤候选再算精确 cosine，Top-K 缺省与上限均为 5、同分按 `chunk_key`；查询参数问题抛 `QueryError`（留给模型纠正），配置类失败（候选被过滤光、向量与片段数量不符、维度不符）抛 `SearchError`（直接中断，不冒充"没有依据"）。18 项单测全部用替身，负例向量刻意造成与查询同向，证明过滤发生在打分之前。命令行验证 `scripts/preview_search.py`（真实缓存）返回确定的 Top-5（含 `node_key`、定位、区间、原文），重复检索排序一致；**两条检索的分数在第 4 位小数会漂移**（查询向量每次现算），排序稳定依赖分差远大于漂移，再次说明分数不能当阈值。全量单测 296 通过，Ruff、格式检查与 mypy 全绿。实现待粘贴后判绿。
 
 里程碑进度仅在 [Agent 开发计划](project_docs/VendorGuard-Agent开发计划.md) 更新，避免再维护多套看板。
