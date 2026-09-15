@@ -1,6 +1,6 @@
 # VendorGuard 当前上下文
 
-> 更新：2026-09-15。M3 已完成，M4 方案已定义、实现未开始；项目定位为 AI Agent / AI 应用开发求职。
+> 更新：2026-09-15。M3 已完成，M4 进入实现：M4-1 共用审查应用层已完成；项目定位为 AI Agent / AI 应用开发求职。
 
 ## 当前定位与入口
 
@@ -28,7 +28,7 @@ VendorGuard 是供应商材料审查 Agent：用户提交材料，Agent 调用�
 | Agent M1 | `agent.py` 与 `agent_tools.py` 已实现真实模型工具循环；预算、错误纠正和脱敏记录机制仍在使用，M1 的快照事实入口（`parse_tool_arguments` / `check_materials`）已删除 |
 | Agent M2 材料输入 | `materials.py` 逐页读取文本 PDF（失败码 `file_not_found`、`not_a_pdf`、`scanned_pdf_unsupported`、`empty_material`）并提供来源核对 `MaterialSources`；`agent_tools.py` 的提取事实管线在规则执行前核对来源、由程序派生执照状态；`agent.py` 的循环先 `read_material` 再 `check_materials`；`agent_session.py` 持有材料与用户补充，支持一次补充闭环。三份自制样例与生成脚本在 `data/demo/materials/`、`scripts/make_demo_materials.py` |
 | Agent M3 制度检索 | `retrieval/chunk_list.py` 从冻结语料生成现行两份制度的 22 条片段并落盘 `data/retrieval/chunks_v1.jsonl`，每条可用 `node_key`、定位路径、字符区间与两份哈希回指解析器节点和归一化正文；候选范围由代码白名单 `CURRENT_EDITION_KEYS` 限定，旧版与外部法规留在仓库作负例，构建入口 `scripts/build_chunk_list.py`。`retrieval/embedding.py` 按 20 条分批生成正文向量并缓存到 `data/retrieval/cache/`（gitignore 不入库），缓存按"模型名 + 正文指纹"整体失效，查询向量不入缓存，构建入口 `scripts/build_embedding_cache.py`。`retrieval/search.py` 先按白名单过滤再算精确 cosine（Top-5，同分按 `chunk_key`；参数错误抛 `QueryError`、配置失败抛 `SearchError`）。`agent.py` 的循环已接入 `search_policy`（启动装载 `load_policy_index`、登记本次真实返回节点、工具结果不含分数）与 `submit_report`（唯一结论出口：纯文本不再产生 `kind=answer`），报告经 `agent_report.py` 的引用闸门核对后才写进 `AgentRunOutcome.report` 与运行记录；节点登记与校验结果都是**单次运行内的局部状态**，CLI 补充轮重新调用 `run_review()` 并逐轮打印报告。检索数据与命令：`data/retrieval/chunks_v1.jsonl`（22 条）、`data/retrieval/cache/`（向量，gitignore），脚本 `scripts/build_chunk_list.py`、`build_embedding_cache.py`、`preview_search.py`、`run_rag_eval.py`（8 题评测结果在 `data/evals/rag_phase1_m3_8q_result.json`）。前端与工作台（M4）尚未实现 |
-| 后续产品链路 | 前端与审查工作台尚未实现；跨轮对话只支持一次补充，未做长期会话管理 |
+| 后续产品链路 | M4 已开工：`review_application.py` 抽出 CLI 与 HTTP 共用的装载与单轮执行，CLI 已改接；HTTP 路由、本地审查记录与工作台页面尚未实现；跨轮对话只支持一次补充 |
 
 当前案件评估中的正常路径仍停在 `analyzing`，补件路径可到 `pending_documents`；已有人工决定接口不等于端到端审批已跑通。Agent 初审报告不依赖推进这些业务状态，也不能把报告确认写成供应商准入批准。
 
@@ -74,6 +74,8 @@ M3-0 复核为 247 项单测与 Ruff、格式检查、mypy 全绿，提交三份
 
 M3 已知限制（如实记录）：`qwen3.7-flash` 在补充案例上 5 次全失败、`qwen3.8-max` 一次通过，属模型行为方差；措辞检查是黑名单兜底；embedding 非逐分量确定，"可复现"绑定具体缓存文件（结果 JSON 记了 `cache_key`）；CLI 只在最后写一份运行记录，补充案例第一轮的追问事件不进档。下一步是 M4（工作台与演示）。
 
-2026-09-15：M4 详细方案已定义，实现尚未开始；见 [M4 实施方案](project_docs/VendorGuard-M4实施方案.md)。M4 只把现有 CLI 审查链路接成受认证的单页工作台，不新增 Agent/RAG 能力，也不接案件、审批或 AVL。当前唯一小功能是 M4-1：抽出 CLI 与 HTTP 共用的审查应用层；本步不创建 HTTP 路由、本地记录或页面。
+2026-09-15：M4 详细方案已定义，见 [M4 实施方案](project_docs/VendorGuard-M4实施方案.md)。M4 只把现有 CLI 审查链路接成受认证的单页工作台，不新增 Agent/RAG 能力，也不接案件、审批或 AVL。
+
+2026-09-15 M4-1 完成：新增 `src/vendorguard/review_application.py`（`ReviewCommand`、`ReviewRuntime`、`build_review_runtime()`、`run_review_round()`）——启动时装载模型配置、规则与检索数据一次，运行时按命令新建会话并执行一轮；`agent.py` 的 CLI 改接它，`main()` 内延迟导入应用层以避免 `agent` 与 `review_application` 的模块级环，仓库仍只有 `agent.py` 一条 `run_review()` 工具循环。CLI 对外行为不变，两处内部改动如实记录：材料检查移到装载依赖之前（扫描件不再牵连检索装载），第二轮改为"补充追加进命令后由应用层新建会话"。证据：`tests/unit/test_review_application.py` 8 项 + `tests/unit/test_agent_cli.py` 5 项，全量单测 353 通过（343 + 8 + 2），Ruff、格式检查与 mypy 全绿；真实启动路径实跑两次——模型端点指向死端口时先打印"已装载 22 条现行制度片段"再退 1，扫描件退 2、未装载检索、未发模型请求。本步不涉及数据库，集成测试未跑。当前唯一小功能是 M4-2：本地审查记录与单轮持久化。
 
 里程碑进度仅在 [Agent 开发计划](project_docs/VendorGuard-Agent开发计划.md) 更新，避免再维护多套看板。

@@ -47,7 +47,7 @@ from .materials import (
     MaterialReadError,
     read_text_pdf,
 )
-from .policy import PolicyDocument, load_policy
+from .policy import PolicyDocument
 from .retrieval.chunk_list import (
     CURRENT_EDITION_KEYS,
     ChunkListError,
@@ -1322,43 +1322,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     started_at = datetime.now()
     reference_date = args.reference_date or date.today()
 
-    try:
-        settings = load_llm_settings({**dotenv_values(".env"), **os.environ})
-        material = load_material(args.material_file)
-        policy = load_policy(Path("policies/rules/v1.0.0.yaml"))
-        app_settings = load_settings()
-    except AgentConfigError as exc:
-        print(f"启动失败: {exc}")
-        return 2
+    # 延迟导入: review_application 在模块级导入本模块的 run_review, 顶层互相导入会成环.
+    from .review_application import ReviewCommand, build_review_runtime, run_review_round
 
-    client = OpenAI(
-        api_key=settings.api_key,
-        base_url=settings.base_url,
-        timeout=30.0,
-        max_retries=0,
-    )
     try:
-        policy_index = load_policy_index(
-            client=client,
-            model=app_settings.embedding_model,
-            cache_path=app_settings.embedding_cache_path,
-            chunk_list_path=POLICY_CHUNK_LIST,
+        # 材料先报: 扫描件这类材料问题不该牵连检索装载, 更不该先触发 embedding 请求
+        material = load_material(args.material_file)
+        runtime = build_review_runtime(
+            {**dotenv_values(".env"), **os.environ},
+            app_settings=load_settings(),
         )
     except AgentConfigError as exc:
         print(f"启动失败: {exc}")
         return 2
-    print(f"[制度检索] 已装载 {len(policy_index.records)} 条现行制度片段")
+    print(f"[制度检索] 已装载 {len(runtime.policy_index.records)} 条现行制度片段")
 
-    session = ReviewSession.start(material)
-    outcome = run_review(
-        args.request,
-        session=session,
-        policy=policy,
-        client=client,
-        policy_index=policy_index,
-        model_name=settings.model_name,
+    command = ReviewCommand(
+        user_request=args.request,
         reference_date=reference_date,
+        material=material,
     )
+    outcome = run_review_round(command, runtime=runtime)
     labels = {"answer": "检查结论", "question": "追问", "failed": "运行失败"}
 
     def show(result: AgentRunOutcome) -> None:
@@ -1370,20 +1354,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     show(outcome)
     if outcome.kind == "question":
-        # M2 只接受一次补充: 回答登记为来源后, 在同一会话里重新读取与校验
+        # M2 只接受一次补充: 用户原文追加进命令, 应用层按它新建会话重新读取与校验
         answer = input("请补充(直接回车放弃): ").strip()
         if answer:
-            round_number = session.record_supplement(answer)
-            print(f"[已登记第 {round_number} 轮用户补充]")
-            outcome = run_review(
-                args.request,
-                session=session,
-                policy=policy,
-                client=client,
-                policy_index=policy_index,
-                model_name=settings.model_name,
-                reference_date=reference_date,
-            )
+            command = command.model_copy(update={"supplements": (*command.supplements, answer)})
+            print(f"[已登记第 {len(command.supplements)} 轮用户补充]")
+            outcome = run_review_round(command, runtime=runtime)
             show(outcome)
     for event in outcome.tool_events:
         if event["name"] == "check_materials" and event["status"] == "ok":
@@ -1391,7 +1367,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"原始校验结果: {raw}")
     log_path = write_run_log(
         outcome,
-        model_name=settings.model_name,
+        model_name=runtime.model_name,
         log_dir=Path("logs/agent-runs"),
         started_at=started_at,
     )

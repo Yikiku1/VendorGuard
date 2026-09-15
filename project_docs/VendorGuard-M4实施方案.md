@@ -1,8 +1,8 @@
 # M4：形成可独立演示的审查工作台
 
 > 日期：2026-09-15。
-> 状态：方案已定义，实现未开始。
-> 当前唯一小功能：M4-1 抽出 CLI 与 HTTP 共用的审查应用层。
+> 状态：M4-1 已完成（2026-09-15），M4-2 待开始。
+> 当前唯一小功能：M4-2 本地审查记录与单轮持久化（M4-1 已完成，记录见[开发计划](VendorGuard-Agent开发计划.md)）。
 > 上游依据：[PRD](VendorGuard-PRD.md) 的第一版范围与完成标准、
 > [Agent 开发计划](VendorGuard-Agent开发计划.md)和[M3 实施方案](VendorGuard-M3实施方案.md)。
 
@@ -358,13 +358,16 @@ Blob URL。页面资源放在 Python 包内，由 FastAPI 提供，不依赖 CDN
 
 ### M4-1：抽出共用审查应用层
 
+状态：已完成（2026-09-15）。应用层接口、CLI 改接、两处有意改变与实测证据见
+[开发计划](VendorGuard-Agent开发计划.md) 的 M4-1 完成记录。
+
 修改范围：`review_application.py`、`agent.py`、对应单元测试。
 
 先写测试：runtime 缺配置时一次报清；完整依赖由外部注入；同一 `ReviewCommand` 能返回
 `question`、`answer + report` 和 `failed`；CLI 改接应用层后仍只调用现有 `run_review()`。
 
 完成判据：CLI 的完整、缺日期和扫描件行为不变；HTTP 后续只需传 command，不需要理解
-工具定义、预算、检索白名单或报告闸门。这是当前唯一小功能。
+工具定义、预算、检索白名单或报告闸门。
 
 ### M4-2：本地记录与单轮持久化
 
@@ -445,7 +448,7 @@ M4 只有同时满足以下条件才算完成：
 
 ## 11. 开始方式
 
-下一次开发只做 M4-1。第一条命令确认 M3 基线：
+以下为 M4-1 的开工方式，保留备查（该步已于 2026-09-15 完成）。第一步确认 M3 基线：
 
 ```powershell
 Set-Location D:\projects\VendorGuard
