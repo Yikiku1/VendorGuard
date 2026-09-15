@@ -9,6 +9,7 @@ read_material 读材料, 再调用 check_materials 提交"从材料读到的事�
 from __future__ import annotations
 
 import json
+import math
 import time
 from datetime import date, datetime
 from pathlib import Path
@@ -28,16 +29,21 @@ from openai.types.completion_usage import CompletionUsage
 from vendorguard.agent import (
     AgentConfigError,
     AgentRunOutcome,
+    PolicyIndex,
     load_llm_settings,
     load_material,
+    load_policy_index,
     run_review,
     write_run_log,
 )
 from vendorguard.agent_session import ReviewSession
 from vendorguard.materials import MaterialDocument
 from vendorguard.policy import load_policy
+from vendorguard.retrieval.chunk_list import CURRENT_EDITION_KEYS, ChunkRecord
+from vendorguard.retrieval.embedding import EMBEDDING_DIMENSION, ChunkVectors
 
 RULES_PATH = Path("policies/rules/v1.0.0.yaml")
+CHUNK_LIST_PATH = Path("data/retrieval/chunks_v1.jsonl")
 MATERIALS_DIR = Path(__file__).resolve().parents[2] / "data" / "demo" / "materials"
 # 与 data/demo/cases/*.yaml 的 reference_date 一致; 用来把声明有效期派生成状态。
 REFERENCE_DATE = date(2026, 9, 1)
@@ -154,12 +160,115 @@ class FakeCompletions:
         return self.scripted.pop(0)
 
 
+class FakeEmbeddings:
+    """检索用的 embedding 替身: 默认返回指向第 0 维的单位向量, 可改成报错.
+
+    与 M3-2 的替身同一契约: 返回项带 index, 向量是 1024 维单位长度.
+    """
+
+    def __init__(
+        self,
+        *,
+        dimension: int = EMBEDDING_DIMENSION,
+        error: Exception | None = None,
+    ) -> None:
+        self.dimension = dimension
+        self.error = error
+        self.requests: list[list[str]] = []
+
+    def create(self, **kwargs) -> SimpleNamespace:
+        payload = kwargs["input"]
+        self.requests.append([str(item) for item in payload])
+        if self.error is not None:
+            raise self.error
+        vector = [1.0, *([0.0] * (self.dimension - 1))]
+        return SimpleNamespace(
+            data=[
+                SimpleNamespace(index=index, embedding=list(vector))
+                for index in range(len(self.requests[-1]))
+            ],
+            usage=SimpleNamespace(prompt_tokens=1),
+        )
+
+
 class FakeClient:
     """伪装 openai.OpenAI 中循环实际用到的那一小块接口."""
 
-    def __init__(self, scripted: list[ChatCompletion]) -> None:
+    def __init__(
+        self,
+        scripted: list[ChatCompletion],
+        embeddings: FakeEmbeddings | None = None,
+    ) -> None:
         self.completions = FakeCompletions(scripted)
         self.chat = SimpleNamespace(completions=self.completions)
+        self.embeddings = embeddings if embeddings is not None else FakeEmbeddings()
+
+
+def search_response(
+    query: str = "关键物料可以先准入后补交质量证书吗",
+    *,
+    top_k: int | None = None,
+    call_id: str = "call_search_1",
+) -> ChatCompletion:
+    """剧本: 模型调用 search_policy 检索制度条款."""
+
+    arguments: dict = {"query": query}
+    if top_k is not None:
+        arguments["top_k"] = top_k
+    return tool_call_response(arguments, call_id=call_id, name="search_policy")
+
+
+def chunk_record(index: int, *, edition_key: str = "demo_supplier_admission_policy_v2"):
+    """造一条现行制度的片段, 只用于给检索提供可引用的节点."""
+
+    text = f"制度正文第{index}条"
+    return ChunkRecord(
+        chunk_key=f"{edition_key}_section_{index}_main",
+        node_key=f"{edition_key}_section_{index}",
+        edition_key=edition_key,
+        document_title="探针制度",
+        locator_path=(f"第{index}节",),
+        display_text=text,
+        search_text=f"探针制度 第{index}节\n{text}",
+        char_start=0,
+        char_end=len(text),
+        source_path="normalized/probe.txt",
+        snapshot_sha256="a" * 64,
+        normalized_sha256="b" * 64,
+    )
+
+
+def policy_index(records: int = 2, *, model: str = "qwen3.7-text-embedding") -> PolicyIndex:
+    """造一份两段的检索数据: 第 0 条与查询同向 (相似度 1.0), 之后依次远离."""
+
+    items = tuple(chunk_record(index) for index in range(1, records + 1))
+    vectors = []
+    for position in range(records):
+        weights = [0.0] * EMBEDDING_DIMENSION
+        weights[0] = 1.0
+        if position:
+            weights[position] = 1.0
+        norm = math.sqrt(sum(value * value for value in weights))
+        vectors.append(tuple(value / norm for value in weights))
+    return PolicyIndex(
+        records=items,
+        vectors=ChunkVectors(
+            model=model,
+            cache_key="c" * 64,
+            dimension=EMBEDDING_DIMENSION,
+            vectors=tuple(vectors),
+        ),
+        model=model,
+    )
+
+
+def tool_payload(client: FakeClient, request_index: int, tool_call_id: str) -> dict:
+    """取出某次模型请求里某个工具调用的结果 JSON."""
+
+    for message in client.completions.calls[request_index]["messages"]:
+        if message.get("role") == "tool" and message.get("tool_call_id") == tool_call_id:
+            return json.loads(message["content"])
+    raise AssertionError(f"第 {request_index} 次请求里没有找到 {tool_call_id} 的工具结果")
 
 
 def test_normal_round_trip_returns_answer(policy) -> None:
@@ -1110,8 +1219,8 @@ def test_ask_user_recorded_and_ends_run(policy) -> None:
     assert event["detail"]["question"] == "请问要检查哪家供应商?"
 
 
-def test_model_request_exposes_read_check_and_question_tools(policy) -> None:
-    """真实模型请求必须声明读材料, 校验与追问三个工具, 否则模型无从选择出口."""
+def test_model_request_exposes_the_four_tools(policy) -> None:
+    """真实模型请求声明读材料, 校验, 检索与追问四个工具, 否则模型无从选择出口."""
 
     client = FakeClient([ask_user_response("请补充缺失材料的来源定位.")])
 
@@ -1125,7 +1234,7 @@ def test_model_request_exposes_read_check_and_question_tools(policy) -> None:
 
     assert outcome.kind == "question"
     tool_names = [tool["function"]["name"] for tool in client.completions.calls[0]["tools"]]
-    assert tool_names == ["read_material", "check_materials", "ask_user"]
+    assert tool_names == ["read_material", "check_materials", "search_policy", "ask_user"]
 
 
 def test_check_tool_accepts_declared_date_not_status(policy) -> None:
@@ -1486,3 +1595,247 @@ def test_unregistered_supplement_round_is_rejected_in_loop(policy) -> None:
     assert outcome.kind == "failed"
     assert outcome.tool_events[1]["status"] == "error"
     assert "user_supplement@round:2" in outcome.tool_events[1]["detail"]
+
+
+# ---------------------------------------------------------------------------
+# M3-4: search_policy 接进同一个循环
+# ---------------------------------------------------------------------------
+
+
+def test_search_round_trip_hands_citable_nodes_to_the_model(policy) -> None:
+    """read -> check -> search -> 结论: 交给模型的是可引用节点, 定位与原文."""
+
+    index = policy_index()
+    client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(check_arguments(), call_id="call_check_1"),
+            search_response(call_id="call_search_1"),
+            text_response("正常准入条件要求营业执照在参考日期仍有效; VEN-001 未命中."),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+        policy_index=index,
+    )
+
+    assert outcome.kind == "answer"
+    assert [event["name"] for event in outcome.tool_events] == [
+        "read_material",
+        "check_materials",
+        "search_policy",
+    ]
+    search_event = outcome.tool_events[2]
+    assert search_event["status"] == "ok"
+    assert search_event["detail"]["returned_nodes"] == [item.node_key for item in index.records]
+    assert search_event["detail"]["query"] == "关键物料可以先准入后补交质量证书吗"
+    assert search_event["detail"]["as_of"] == "2026-09-01"
+
+    # 第 4 次请求 (下标 3) 才带上检索结果, 用它核对交给模型的字段
+    payload = tool_payload(client, 3, "call_search_1")
+    assert payload["scope"] == list(CURRENT_EDITION_KEYS)
+    assert payload["as_of"] == "2026-09-01"
+    first = payload["results"][0]
+    assert set(first) == {"chunk_key", "node_key", "edition_key", "title", "locator", "text"}
+    assert first["node_key"] == index.records[0].node_key
+    assert first["chunk_key"] != first["node_key"]
+    assert first["text"] == index.records[0].display_text
+    assert first["title"] == "第1节"
+    assert first["locator"] == ["第1节"]
+    # 分数不给模型: 它跨请求不可比, 给出去只会被当成证据
+    assert "score" not in json.dumps(payload)
+
+
+def test_search_tool_declares_query_and_top_k(policy) -> None:
+    """检索工具声明 query 必填, top_k 可选, 并写明引用只用 node_key."""
+
+    client = FakeClient([ask_user_response("请补充缺失材料的来源定位.")])
+
+    run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    search_tool = client.completions.calls[0]["tools"][2]["function"]
+    assert search_tool["name"] == "search_policy"
+    assert search_tool["parameters"]["required"] == ["query"]
+    assert set(search_tool["parameters"]["properties"]) == {"query", "top_k"}
+    assert "node_key" in search_tool["description"]
+
+
+def test_search_argument_error_uses_the_shared_correction_channel(policy) -> None:
+    """检索参数非法走共享纠正通道: 模型改正之后仍能继续走完链条."""
+
+    client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(check_arguments(), call_id="call_check_1"),
+            tool_call_response({"top_k": 3}, call_id="call_bad_search", name="search_policy"),
+            search_response(call_id="call_search_ok"),
+            text_response("依据检索到的现行条款作答."),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+        policy_index=policy_index(),
+    )
+
+    assert outcome.kind == "answer"
+    rejected = outcome.tool_events[2]
+    assert rejected["name"] == "search_policy"
+    assert rejected["status"] == "error"
+    assert "query" in rejected["detail"]
+    assert outcome.tool_events[3]["status"] == "ok"
+
+
+def test_top_k_out_of_range_is_offered_back_for_correction(policy) -> None:
+    """top_k 越界由检索层判定, 作为参数错误回给模型而不是直接失败."""
+
+    client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(check_arguments(), call_id="call_check_1"),
+            search_response(top_k=9, call_id="call_bad_topk"),
+            search_response(top_k=5, call_id="call_search_ok"),
+            text_response("依据检索到的现行条款作答."),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+        policy_index=policy_index(),
+    )
+
+    assert outcome.kind == "answer"
+    rejected = outcome.tool_events[2]
+    assert rejected["status"] == "error"
+    assert "top_k" in rejected["detail"]
+
+
+def test_search_without_loaded_index_fails_the_run(policy) -> None:
+    """没有装载检索数据时调用检索工具直接失败, 不产出结论."""
+
+    client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(check_arguments(), call_id="call_check_1"),
+            search_response(call_id="call_search_1"),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+    )
+
+    assert outcome.kind == "failed"
+    assert "检索" in outcome.text
+    assert outcome.tool_events[-1]["name"] == "search_policy"
+    assert outcome.tool_events[-1]["status"] == "error"
+
+
+def test_embedding_failure_fails_the_run_without_answer(policy) -> None:
+    """embedding 不可用属于检索失败: 直接失败, 不给纠正机会也不继续要结论."""
+
+    client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(check_arguments(), call_id="call_check_1"),
+            search_response(call_id="call_search_1"),
+            text_response("这条结论不应该被请求到"),
+        ],
+        embeddings=FakeEmbeddings(error=RuntimeError("connection reset")),
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+        policy_index=policy_index(),
+    )
+
+    assert outcome.kind == "failed"
+    assert "检索" in outcome.text
+    assert outcome.tool_events[-1]["status"] == "error"
+    # 剧本里还留着一条结论响应: 没有继续请求它, 说明失败是立即发生的
+    assert client.completions.scripted == [text_response("这条结论不应该被请求到")]
+
+
+def test_search_attempts_count_toward_the_tool_budget(policy) -> None:
+    """检索与其它工具共用同一份工具调用预算."""
+
+    client = FakeClient(
+        [
+            read_response(),
+            tool_call_response(check_arguments(), call_id="call_check_1"),
+            search_response(call_id="call_search_1"),
+            search_response(call_id="call_search_2"),
+        ]
+    )
+
+    outcome = run_review(
+        "请检查",
+        session=ReviewSession.start(material()),
+        reference_date=REFERENCE_DATE,
+        policy=policy,
+        client=client,
+        policy_index=policy_index(),
+        max_tool_attempts=3,
+    )
+
+    assert outcome.kind == "failed"
+    assert "上限" in outcome.text
+    assert outcome.tool_attempts == 3
+
+
+def test_load_policy_index_uses_the_committed_chunk_list(tmp_path) -> None:
+    """启动装载读的是入库清单: 22 条现行片段, 向量等长同维, 并把缓存落到指定位置."""
+
+    cache_path = tmp_path / "cache" / "embedding_v1.json"
+
+    index = load_policy_index(
+        client=FakeClient([]),
+        model="qwen3.7-text-embedding",
+        cache_path=cache_path,
+        chunk_list_path=CHUNK_LIST_PATH,
+    )
+
+    assert len(index.records) == 22
+    assert len(index.vectors.vectors) == 22
+    assert index.vectors.dimension == EMBEDDING_DIMENSION
+    assert all(record.edition_key in CURRENT_EDITION_KEYS for record in index.records)
+    assert cache_path.is_file()
+
+
+def test_load_policy_index_reports_a_missing_chunk_list(tmp_path) -> None:
+    """清单缺失归一为启动错误, 而不是给出一份空索引."""
+
+    with pytest.raises(AgentConfigError, match="清单"):
+        load_policy_index(
+            client=FakeClient([]),
+            model="qwen3.7-text-embedding",
+            cache_path=tmp_path / "embedding_v1.json",
+            chunk_list_path=tmp_path / "missing.jsonl",
+        )

@@ -31,16 +31,31 @@ from openai.types.chat import (
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
 )
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .agent_session import ReviewSession
 from .agent_tools import ToolArgumentError, check_extracted_facts, parse_extracted_facts
+from .config import load_settings
 from .materials import (
     MaterialDocument,
     MaterialReadError,
     read_text_pdf,
 )
 from .policy import PolicyDocument, load_policy
+from .retrieval.chunk_list import (
+    CURRENT_EDITION_KEYS,
+    ChunkListError,
+    ChunkRecord,
+    load_chunk_list,
+)
+from .retrieval.embedding import ChunkVectors, EmbeddingError, load_or_build_vectors
+from .retrieval.search import (
+    DEFAULT_TOP_K,
+    QueryError,
+    RetrievedChunk,
+    SearchError,
+    search_policy,
+)
 
 SYSTEM_PROMPT = (
     "你是供应商材料审查助手. 检查材料前必须先调用 read_material 读取本次材料, "
@@ -50,6 +65,10 @@ SYSTEM_PROMPT = (
     "随后调用 check_materials 提交从材料里读到的事实, "
     "每项事实必须同时给出 材料ID@page:N 形式的来源页码; 材料里读不到的字段直接省略, "
     "不得编造, 也不得自行判断执照是否有效——只提交材料上写明的有效期截止日. "
+    "需要制度依据时调用 search_policy 检索现行内部制度条款: 引用制度只能用返回的 "
+    "node_key 与原文, chunk_key 只是召回编号, 不得当作引用标识; "
+    "检索不到相关条款时必须说明依据不足, 不得凭记忆引用制度, 也不得把相似度高的"
+    "片段当成结论已成立的证据; 只能检索现行版本, 不得要求回放历史版本. "
     "需要向用户提问或说明无法回答时, 必须调用 ask_user 工具, 纯文本不能作为追问出口; "
     "追问中不得宣告批准, 已完成审批或检查结论. "
     "若用户问题超出材料准入检查范围(如交付率), 只能说明当前仅支持材料准入检查, "
@@ -115,6 +134,43 @@ CHECK_MATERIALS_TOOL: ChatCompletionFunctionToolParam = {
     },
 }
 
+# 现行制度清单对应的版本时点: 由程序给定, 不随 --reference-date 变化.
+# 版本过滤用的是固定白名单, 所以这个日期只说明"依据的是哪一版制度",
+# 不能让它看起来像按日期回放历史版本.
+POLICY_AS_OF = date(2026, 9, 1)
+
+# 检索片段清单 (由 scripts/build_chunk_list.py 生成并入库); 相对启动目录解析.
+POLICY_CHUNK_LIST = Path("data/retrieval/chunks_v1.jsonl")
+
+SEARCH_POLICY_TOOL: ChatCompletionFunctionToolParam = {
+    "type": "function",
+    "function": {
+        "name": "search_policy",
+        "description": (
+            "检索现行内部制度的条款原文, 用于判断准入要求. "
+            "只检索现行版本; 结果里的 node_key 是引用制度的唯一标识, "
+            "chunk_key 只是召回用的片段编号, 不能拿来引用. "
+            "结果已按相关性排序, 但排在前面不等于能支持结论: "
+            "找不到相关条款时必须说明依据不足, 不得凭记忆引用制度."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "要查的制度问题, 非空, 不超过 500 字",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "返回条数, 缺省 5, 上限 5",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 ASK_USER_TOOL: ChatCompletionFunctionToolParam = {
     "type": "function",
     "function": {
@@ -171,6 +227,30 @@ def _parse_read_material_arguments(raw_json: str) -> str:
     return material_id
 
 
+def _parse_search_policy_arguments(raw_json: str) -> tuple[str, int]:
+    """解析 search_policy 参数, 取出查询与条数, 非法时抛 ToolArgumentError.
+
+    这里只管形状: 查询长度与 top_k 范围由检索层判定并抛 QueryError, 两者都回到
+    共享纠正通道, 模型改正后可以重试.
+    """
+
+    try:
+        raw = json.loads(raw_json)
+    except (TypeError, ValueError) as exc:
+        raise ToolArgumentError(f"检索参数不是合法 JSON: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ToolArgumentError('search_policy 参数必须是 {"query": "..."} 形式的 JSON 对象')
+    query = raw.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise ToolArgumentError(
+            "search_policy 参数必须包含非空的 query 字符串, 不能把问题写在其他字段里"
+        )
+    top_k = raw.get("top_k", DEFAULT_TOP_K)
+    if not isinstance(top_k, int) or isinstance(top_k, bool):
+        raise ToolArgumentError(f"top_k 必须是整数, 缺省 {DEFAULT_TOP_K}")
+    return query, top_k
+
+
 def _material_payload(material: MaterialDocument) -> dict[str, Any]:
     """按工具契约渲染材料: 材料 ID、页数与逐页文本, 页码从 1 开始."""
 
@@ -181,6 +261,44 @@ def _material_payload(material: MaterialDocument) -> dict[str, Any]:
             {"page": number, "text": text} for number, text in enumerate(material.pages, start=1)
         ],
     }
+
+
+def _search_payload(results: Sequence[RetrievedChunk]) -> dict[str, Any]:
+    """按工具契约渲染检索结果: 只有可引用的节点, 版本, 定位与原文.
+
+    刻意不带相似度分数: 分数跨请求不可比, 给到模型只会被当成证据.
+    title 取定位路径的首层, 也就是所属章节标题.
+    """
+
+    return {
+        "as_of": POLICY_AS_OF.isoformat(),
+        "scope": list(CURRENT_EDITION_KEYS),
+        "results": [
+            {
+                "chunk_key": item.chunk_key,
+                "node_key": item.node_key,
+                "edition_key": item.edition_key,
+                "title": item.locator_path[0],
+                "locator": list(item.locator_path),
+                "text": item.display_text,
+            }
+            for item in results
+        ],
+    }
+
+
+class PolicyIndex(BaseModel):
+    """一次运行可用的制度检索数据: 片段清单, 正文向量与 embedding 模型名.
+
+    三者必须来自同一次构建; 真实运行由启动入口装载, 测试注入替身. 没有装载时
+    检索工具直接失败, 不允许退化成"制度里没有相关规定".
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    records: tuple[ChunkRecord, ...]
+    vectors: ChunkVectors
+    model: str = Field(min_length=1)
 
 
 class AgentRunOutcome(BaseModel):
@@ -217,6 +335,7 @@ def run_review(
     policy: PolicyDocument,
     client: OpenAI,
     reference_date: date,
+    policy_index: PolicyIndex | None = None,
     model_name: str = "qwen3.7-flash",
     max_model_requests: int = 8,
     max_tool_attempts: int = 12,
@@ -229,6 +348,10 @@ def run_review(
     没有缺失事实才允许输出检查说明; 有缺失事实时只允许 ask_user 追问.
     检查说明返回 kind=answer, ask_user 返回 kind=question; 预算耗尽、超时、
     网络失败和纠正用尽返回 kind=failed.
+
+    policy_index 装载后模型可以调用 search_policy 检索制度条款; 参数问题走共享
+    纠正通道, 检索配置或 embedding 不可用则直接失败. 本次检索真实返回过的节点只
+    由成功的检索写入, 报告引用只认这份集合 (M3-5).
     """
 
     started = time.monotonic()
@@ -255,6 +378,9 @@ def run_review(
     prompt_tokens = 0
     completion_tokens = 0
     tool_events: list[dict[str, Any]] = []
+    # 本次运行真实返回过的节点 (node_key -> 结果): 只由成功的 search_policy 写入.
+    # 报告里的制度引用必须落在这份集合里, 模型编不出没检索到的节点.
+    returned_nodes: dict[str, RetrievedChunk] = {}
 
     def finish(kind: Literal["answer", "question", "failed"], text: str) -> AgentRunOutcome:
         return AgentRunOutcome(
@@ -286,7 +412,12 @@ def run_review(
             completion = client.chat.completions.create(
                 model=model_name,
                 messages=messages,
-                tools=[READ_MATERIAL_TOOL, CHECK_MATERIALS_TOOL, ASK_USER_TOOL],
+                tools=[
+                    READ_MATERIAL_TOOL,
+                    CHECK_MATERIALS_TOOL,
+                    SEARCH_POLICY_TOOL,
+                    ASK_USER_TOOL,
+                ],
                 timeout=min(request_timeout, max(remaining, 0.001)),
                 extra_body={"enable_thinking": False},
             )
@@ -438,6 +569,7 @@ def run_review(
             if call.function.name not in (
                 "read_material",
                 "check_materials",
+                "search_policy",
                 "ask_user",
             ):
                 if corrections_used >= 1:
@@ -612,6 +744,92 @@ def run_review(
                         tool_call_id=call.id,
                         content=json.dumps(_material_payload(material), ensure_ascii=False),
                     )
+                )
+                continue
+
+            if call.function.name == "search_policy":
+                try:
+                    query, top_k = _parse_search_policy_arguments(call.function.arguments)
+                    if policy_index is None:
+                        raise SearchError("本次运行没有装载制度检索数据, 无法检索制度条款")
+                    results = search_policy(
+                        query,
+                        records=policy_index.records,
+                        vectors=policy_index.vectors,
+                        embedding_client=client,
+                        model=policy_index.model,
+                        top_k=top_k,
+                    )
+                except (ToolArgumentError, QueryError) as exc:
+                    # 参数问题 (含查询过长与 top_k 越界) 走与读材料共享的纠正通道
+                    if corrections_used >= 1:
+                        tool_events.append(
+                            {
+                                "tool_call_id": call.id,
+                                "name": "search_policy",
+                                "status": "error",
+                                "detail": f"纠正机会已用尽, 检索参数仍然非法: {exc}",
+                                "assistant_content": (message.content or "")[:200],
+                                "arguments": call.function.arguments,
+                            }
+                        )
+                        return finish("failed", f"纠正机会已用尽, 检索参数仍然非法: {exc}")
+                    corrections_used += 1
+                    messages.append(
+                        ChatCompletionToolMessageParam(
+                            role="tool",
+                            tool_call_id=call.id,
+                            content=json.dumps({"error": str(exc)}, ensure_ascii=False),
+                        )
+                    )
+                    tool_events.append(
+                        {
+                            "tool_call_id": call.id,
+                            "name": "search_policy",
+                            "status": "error",
+                            "detail": str(exc),
+                            "assistant_content": (message.content or "")[:200],
+                            "arguments": call.function.arguments,
+                        }
+                    )
+                    continue
+                except (EmbeddingError, SearchError) as exc:
+                    # 检索配置或 embedding 不可用: 直接失败, 不产出报告也不给重试机会
+                    detail = f"制度检索不可用: {exc}"
+                    tool_events.append(
+                        {
+                            "tool_call_id": call.id,
+                            "name": "search_policy",
+                            "status": "error",
+                            "detail": detail,
+                            "arguments": call.function.arguments,
+                        }
+                    )
+                    return finish("failed", detail)
+
+                for item in results:
+                    returned_nodes[item.node_key] = item
+                messages.append(
+                    ChatCompletionToolMessageParam(
+                        role="tool",
+                        tool_call_id=call.id,
+                        content=json.dumps(_search_payload(results), ensure_ascii=False),
+                    )
+                )
+                tool_events.append(
+                    {
+                        "tool_call_id": call.id,
+                        "name": "search_policy",
+                        "status": "ok",
+                        "detail": {
+                            "query": query,
+                            "top_k": top_k,
+                            "as_of": POLICY_AS_OF.isoformat(),
+                            "scope": list(CURRENT_EDITION_KEYS),
+                            "returned_nodes": [item.node_key for item in results],
+                        },
+                        "arguments": call.function.arguments,
+                    }
                 )
                 continue
 
@@ -813,6 +1031,37 @@ def load_material(path: Path) -> MaterialDocument:
         raise AgentConfigError(f"材料无法作为文本 PDF 处理: {exc}") from exc
 
 
+def load_policy_index(
+    *,
+    client: OpenAI,
+    model: str,
+    cache_path: str | Path,
+    chunk_list_path: str | Path,
+) -> PolicyIndex:
+    """装载制度检索数据: 读片段清单, 再取回或构建正文向量缓存.
+
+    清单读不出来、缓存损坏或 embedding 不可用都归一为启动错误: 让本次运行失败,
+    而不是让检索工具看起来"制度里没有相关规定".
+    """
+
+    try:
+        records = load_chunk_list(chunk_list_path)
+    except ChunkListError as exc:
+        raise AgentConfigError(f"制度片段清单不可用: {exc}") from exc
+
+    try:
+        vectors = load_or_build_vectors(
+            records,
+            client=client,
+            model=model,
+            cache_path=cache_path,
+        )
+    except EmbeddingError as exc:
+        raise AgentConfigError(f"正文向量缓存不可用: {exc}") from exc
+
+    return PolicyIndex(records=records, vectors=vectors, model=model)
+
+
 def write_run_log(
     outcome: AgentRunOutcome,
     *,
@@ -859,8 +1108,10 @@ def write_run_log(
 __all__ = [
     "AgentConfigError",
     "AgentRunOutcome",
+    "PolicyIndex",
     "load_llm_settings",
     "load_material",
+    "load_policy_index",
     "main",
     "run_review",
     "write_run_log",
@@ -892,6 +1143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings = load_llm_settings({**dotenv_values(".env"), **os.environ})
         material = load_material(args.material_file)
         policy = load_policy(Path("policies/rules/v1.0.0.yaml"))
+        app_settings = load_settings()
     except AgentConfigError as exc:
         print(f"启动失败: {exc}")
         return 2
@@ -902,12 +1154,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         timeout=30.0,
         max_retries=0,
     )
+    try:
+        policy_index = load_policy_index(
+            client=client,
+            model=app_settings.embedding_model,
+            cache_path=app_settings.embedding_cache_path,
+            chunk_list_path=POLICY_CHUNK_LIST,
+        )
+    except AgentConfigError as exc:
+        print(f"启动失败: {exc}")
+        return 2
+    print(f"[制度检索] 已装载 {len(policy_index.records)} 条现行制度片段")
+
     session = ReviewSession.start(material)
     outcome = run_review(
         args.request,
         session=session,
         policy=policy,
         client=client,
+        policy_index=policy_index,
         model_name=settings.model_name,
         reference_date=reference_date,
     )
@@ -924,6 +1189,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 session=session,
                 policy=policy,
                 client=client,
+                policy_index=policy_index,
                 model_name=settings.model_name,
                 reference_date=reference_date,
             )
