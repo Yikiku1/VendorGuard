@@ -203,3 +203,44 @@ def test_workbench_frontend_collapses_details_and_expands_failures() -> None:
     assert 'setAttribute("open"' in APP_JS
     # 报告里保留"初审报告不是准入决定"的固定边界提示
     assert "初审报告不是准入决定" in APP_JS
+
+
+# ---------------------------------------------------------------------------
+# 亮色模式
+# ---------------------------------------------------------------------------
+
+
+def test_workbench_supports_a_light_theme() -> None:
+    """亮色配色存在且跟随系统: 手动选择与 prefers-color-scheme 两条入口都有值."""
+
+    assert ':root[data-theme="light"]' in CSS
+    assert "prefers-color-scheme: light" in CSS
+    assert "color-scheme: light" in CSS
+    # 亮色下同样是平面: 不加渐变与投影 (整份样式的平面测试仍然生效)
+    assert "gradient" not in CSS
+    assert "box-shadow" not in CSS
+    # 两套配色共用同一个圆角变量, 不引入第二种圆角
+    assert "--radius: 4px" in CSS
+
+
+def test_workbench_theme_toggle_is_in_the_page() -> None:
+    """页面壳里有主题切换按钮, 并且它不在登录后才出现的区域里."""
+
+    with TestClient(create_app()) as client:
+        body = client.get("/workbench").text
+
+    assert 'id="theme-toggle"' in body
+    # 切换按钮在顶栏 (登录前也能看到), 不在 app-view 里
+    topbar = body.split("<main", 1)[0]
+    assert 'id="theme-toggle"' in topbar
+
+
+def test_workbench_theme_choice_is_remembered_per_browser() -> None:
+    """手动选择记在 localStorage, 没选择时跟随系统; 主题写在 html 的 data-theme 上."""
+
+    assert "localStorage" in APP_JS
+    assert "prefers-color-scheme" in APP_JS
+    assert "dataset.theme" in APP_JS
+    assert "matchMedia" in APP_JS
+    # 只识别两种主题名
+    assert '"light"' in APP_JS and '"dark"' in APP_JS

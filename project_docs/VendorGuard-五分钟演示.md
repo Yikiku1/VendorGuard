@@ -18,7 +18,9 @@ uv run --no-sync uvicorn vendorguard.app:create_app --factory
 
 ## 1. 登录（20 秒）
 
-用 `.env` 里的 `demo.specialist` 登录。
+用 `.env` 里的 `demo.specialist` 登录（开发时也可以用管理员账号 `admin`，口令由
+`VENDORGUARD_DEMO_ADMIN_PASSWORD` 决定、不配置时沿用 `demo.specialist` 的口令；
+两个账号看到的"最近审查"互相隔离，各看各的记录——顺带也就是"跨用户读不到"的现场演示）。
 
 预期：顶栏出现用户名与角色；左侧"最近审查"列出本轮验收留下的记录，含状态徽标
 （`报告完成` / `失败`）与"重跑自 xxxxxxxx"这类关联。

@@ -3,6 +3,10 @@
  * 风格约定 (2026-09-16 明确): 深色平面风, 不用渐变, 不用投影, 圆角一律 4px;
  * 用 1px 边框与留白划分层级, 强调色只用在主按钮与焦点上. 所有区域都可换行,
  * 长文件名/错误消息不会把布局撑破 (方案 8.3).
+ *
+ * 主题: 深色是默认。亮色有两个入口——手动切换写在 <html data-theme="light">,
+ * 没手动选过时跟随系统 (prefers-color-scheme: light)。两处是同一套取值, 改一处
+ * 要改另一处; 两套都只用平面色块与 1px 边框, 没有渐变和投影。
  */
 
 :root {
@@ -20,6 +24,39 @@
   --danger: #ff6369;
   --radius: 4px;
   --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+/* 亮色取值 (与下面的媒体查询保持一致) */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #fafafa;
+  --raised: #f4f4f5;
+  --border: #e4e4e7;
+  --text: #18181b;
+  --muted: #6b6b74;
+  --accent: #4f5bd5;
+  --accent-ink: #ffffff;
+  --ok: #1f7a4d;
+  --warn: #8a5a00;
+  --danger: #c0362c;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    --bg: #ffffff;
+    --panel: #fafafa;
+    --raised: #f4f4f5;
+    --border: #e4e4e7;
+    --text: #18181b;
+    --muted: #6b6b74;
+    --accent: #4f5bd5;
+    --accent-ink: #ffffff;
+    --ok: #1f7a4d;
+    --warn: #8a5a00;
+    --danger: #c0362c;
+  }
 }
 
 * {

@@ -9,6 +9,7 @@
  */
 
 const TOKEN_KEY = "vendorguard.token";
+const THEME_KEY = "vendorguard.theme";
 const REVIEWS_API = "/api/reviews";
 
 const STATUS_TEXT = {
@@ -43,6 +44,7 @@ const dom = {
   appView: document.getElementById("app-view"),
   currentUser: document.getElementById("current-user"),
   logout: document.getElementById("logout-button"),
+  themeToggle: document.getElementById("theme-toggle"),
   historyState: document.getElementById("history-state"),
   historyList: document.getElementById("history-list"),
   reviewForm: document.getElementById("review-form"),
@@ -135,6 +137,45 @@ function pageOf(locator) {
 function supplementRoundOf(locator) {
   const match = /^user_supplement@round:(\d+)$/.exec(String(locator));
   return match ? Number(match[1]) : null;
+}
+
+/* ---------- 主题: 手动选择优先, 否则跟随系统 ---------- */
+
+function systemTheme() {
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+    ? "light"
+    : "dark";
+}
+
+function storedTheme() {
+  try {
+    const value = localStorage.getItem(THEME_KEY);
+    return value === "light" || value === "dark" ? value : "";
+  } catch (cause) {
+    // 隐私模式等拿不到 localStorage: 就当没手动选过
+    return "";
+  }
+}
+
+function resolvedTheme() {
+  return storedTheme() || systemTheme();
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  // 按钮显示"切过去会变成什么": 当前亮色就显示暗色
+  dom.themeToggle.textContent = theme === "light" ? "暗色" : "亮色";
+  dom.themeToggle.setAttribute("aria-label", theme === "light" ? "切换到暗色" : "切换到亮色");
+}
+
+function toggleTheme() {
+  const next = resolvedTheme() === "light" ? "dark" : "light";
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch (cause) {
+    // 存不下就只对当前页面生效
+  }
+  applyTheme(next);
 }
 
 /* ---------- 会话 ---------- */
@@ -695,6 +736,8 @@ async function submitRerun() {
 /* ---------- 启动 ---------- */
 
 function init() {
+  applyTheme(resolvedTheme());
+  dom.themeToggle.addEventListener("click", toggleTheme);
   dom.loginForm.addEventListener("submit", login);
   dom.reviewForm.addEventListener("submit", submitReview);
   dom.supplementForm.addEventListener("submit", submitSupplement);

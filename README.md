@@ -17,6 +17,8 @@ M4 已完成：同一条审查链路现在有两个入口——命令行和一�
 ```
 
 工作台是原生 HTML/CSS/JS（无前端工程、无 CDN），Token 只放 `sessionStorage`；
+界面是深色 / 亮色两套**平面**配色（1px 边框、4px 圆角，没有渐变和投影），默认跟随系统偏好，
+顶栏按钮可手动切换（选择记在浏览器本地）；
 所有按钮按服务端算出的 `allowed_actions` 显示，前端不复制状态转换规则；
 记录存在本地忽略目录 `var/reviews/`（**演示证据，不是业务案件**：不接 `admission_cases`、
 不调用人工准入决定接口、不修改案件或供应商状态）。
@@ -32,6 +34,12 @@ M4 已完成：同一条审查链路现在有两个入口——命令行和一�
 （`data/retrieval/cache/`，gitignore）：**缓存缺失时首次启动会调用付费 embedding 接口**建立缓存，
 之后按"模型名 + 正文指纹"复用；查询向量每次现算（很便宜），不进缓存。
 
+演示账号由种子命令幂等创建（只补缺失的，已存在的原样不动）：
+
+```powershell
+uv run --no-sync python -m vendorguard.seed
+```
+
 ## 启动
 
 ```powershell
@@ -43,7 +51,10 @@ uv run --no-sync uvicorn vendorguard.app:create_app --factory
 ```
 
 浏览器打开 <http://127.0.0.1:8000/workbench>，用 `.env` 里的演示账号登录
-（`demo.specialist` 采购专员 / `demo.manager` 采购经理）。
+（`demo.specialist` 采购专员 / `demo.manager` 采购经理）；另有一个演示与开发用的管理员账号
+`admin`，口令由 `VENDORGUARD_DEMO_ADMIN_PASSWORD` 决定，**不配置时沿用 `demo.specialist` 的口令**。
+
+> 演示账号只用于本机演示：任何对外环境都必须换成强口令，并且不要复用这里的示例账号。
 
 **五分钟演示**（从登录到来源核对、失败重跑与边界说明，含每一步的预期结果）见
 [演示脚本](project_docs/VendorGuard-五分钟演示.md)。
