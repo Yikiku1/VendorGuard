@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     # 缓存是调用付费接口算出的派生物, 不入库, 指纹不符时整份重建。
     embedding_model: str = "qwen3.7-text-embedding"
     embedding_cache_path: Path = Path("data/retrieval/cache/embedding_v1.json")
+    # M4 本地审查记录目录: 演示证据落在本地忽略目录, 不进公开仓库。
+    review_data_dir: Path = Path("var/reviews")
 
 
 def load_settings(*, env_file: str | Path | None = ".env") -> Settings:

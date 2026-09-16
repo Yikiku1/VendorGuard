@@ -24,6 +24,9 @@ logs/
 # 检索向量缓存: 调付费接口算出的派生物, 指纹不符时整份重建, 不进公开仓库
 data/retrieval/cache/
 
+# 本地审查记录与上传材料 (M4 演示证据, 含真实上传内容, 不进公开仓库)
+var/reviews/
+
 # Editor and local database files
 .idea/
 .vscode/

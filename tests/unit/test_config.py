@@ -42,6 +42,24 @@ def test_load_settings_reads_retrieval_embedding_overrides(monkeypatch: MonkeyPa
     assert settings.embedding_cache_path == Path("logs/other_vectors.json")
 
 
+def test_load_settings_defaults_review_data_directory() -> None:
+    """M4 本地审查记录目录有默认值: 演示证据落在 var/reviews, 不进 Git."""
+
+    settings = load_settings(env_file=None)
+
+    assert settings.review_data_dir == Path("var/reviews")
+
+
+def test_load_settings_reads_review_data_directory_override(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """本地审查目录可被环境变量覆盖, 名字要与 .env.example 一致."""
+
+    monkeypatch.setenv("VENDORGUARD_REVIEW_DATA_DIR", "var/other-reviews")
+
+    assert load_settings(env_file=None).review_data_dir == Path("var/other-reviews")
+
+
 def test_load_settings_ignores_unprefixed_environment_variables(
     monkeypatch: MonkeyPatch,
 ) -> None:

@@ -416,8 +416,8 @@ class AgentRunOutcome(BaseModel):
     report: ReviewReport | None = None
 
 
-def _redact_secret(text: str) -> str:
-    """把 sk- 样式的密钥串整体打码, 防止异常消息夹带 key 入档."""
+def redact_secret(text: str) -> str:
+    """把 sk- 样式的密钥串整体打码, 防止异常消息或工具事件夹带 key 入档."""
 
     return re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-***", text)
 
@@ -484,7 +484,7 @@ def run_review(
     ) -> AgentRunOutcome:
         return AgentRunOutcome(
             kind=kind,
-            text=_redact_secret(text),
+            text=redact_secret(text),
             model_requests=model_requests,
             tool_attempts=tool_attempts,
             elapsed_seconds=time.monotonic() - started,
@@ -1284,7 +1284,7 @@ def write_run_log(
     }
     path = log_dir / f"{started_at:%Y%m%dT%H%M%S%f}.json"
     raw_json = json.dumps(payload, ensure_ascii=False, indent=2)
-    path.write_text(_redact_secret(raw_json), encoding="utf-8")
+    path.write_text(redact_secret(raw_json), encoding="utf-8")
     return path
 
 
@@ -1296,6 +1296,7 @@ __all__ = [
     "load_material",
     "load_policy_index",
     "main",
+    "redact_secret",
     "run_review",
     "write_run_log",
 ]

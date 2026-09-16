@@ -1,6 +1,6 @@
 # VendorGuard 当前上下文
 
-> 更新：2026-09-15。M3 已完成，M4 进入实现：M4-1 共用审查应用层已完成；项目定位为 AI Agent / AI 应用开发求职。
+> 更新：2026-09-15。M3 已完成，M4 进入实现：M4-1 共用审查应用层与 M4-2 本地审查记录已完成；项目定位为 AI Agent / AI 应用开发求职。
 
 ## 当前定位与入口
 
@@ -28,7 +28,7 @@ VendorGuard 是供应商材料审查 Agent：用户提交材料，Agent 调用�
 | Agent M1 | `agent.py` 与 `agent_tools.py` 已实现真实模型工具循环；预算、错误纠正和脱敏记录机制仍在使用，M1 的快照事实入口（`parse_tool_arguments` / `check_materials`）已删除 |
 | Agent M2 材料输入 | `materials.py` 逐页读取文本 PDF（失败码 `file_not_found`、`not_a_pdf`、`scanned_pdf_unsupported`、`empty_material`）并提供来源核对 `MaterialSources`；`agent_tools.py` 的提取事实管线在规则执行前核对来源、由程序派生执照状态；`agent.py` 的循环先 `read_material` 再 `check_materials`；`agent_session.py` 持有材料与用户补充，支持一次补充闭环。三份自制样例与生成脚本在 `data/demo/materials/`、`scripts/make_demo_materials.py` |
 | Agent M3 制度检索 | `retrieval/chunk_list.py` 从冻结语料生成现行两份制度的 22 条片段并落盘 `data/retrieval/chunks_v1.jsonl`，每条可用 `node_key`、定位路径、字符区间与两份哈希回指解析器节点和归一化正文；候选范围由代码白名单 `CURRENT_EDITION_KEYS` 限定，旧版与外部法规留在仓库作负例，构建入口 `scripts/build_chunk_list.py`。`retrieval/embedding.py` 按 20 条分批生成正文向量并缓存到 `data/retrieval/cache/`（gitignore 不入库），缓存按"模型名 + 正文指纹"整体失效，查询向量不入缓存，构建入口 `scripts/build_embedding_cache.py`。`retrieval/search.py` 先按白名单过滤再算精确 cosine（Top-5，同分按 `chunk_key`；参数错误抛 `QueryError`、配置失败抛 `SearchError`）。`agent.py` 的循环已接入 `search_policy`（启动装载 `load_policy_index`、登记本次真实返回节点、工具结果不含分数）与 `submit_report`（唯一结论出口：纯文本不再产生 `kind=answer`），报告经 `agent_report.py` 的引用闸门核对后才写进 `AgentRunOutcome.report` 与运行记录；节点登记与校验结果都是**单次运行内的局部状态**，CLI 补充轮重新调用 `run_review()` 并逐轮打印报告。检索数据与命令：`data/retrieval/chunks_v1.jsonl`（22 条）、`data/retrieval/cache/`（向量，gitignore），脚本 `scripts/build_chunk_list.py`、`build_embedding_cache.py`、`preview_search.py`、`run_rag_eval.py`（8 题评测结果在 `data/evals/rag_phase1_m3_8q_result.json`）。前端与工作台（M4）尚未实现 |
-| 后续产品链路 | M4 已开工：`review_application.py` 抽出 CLI 与 HTTP 共用的装载与单轮执行，CLI 已改接；HTTP 路由、本地审查记录与工作台页面尚未实现；跨轮对话只支持一次补充 |
+| 后续产品链路 | M4 已开工：`review_application.py`（CLI 与 HTTP 共用的装载与单轮执行）与 `review_records.py`（本地审查记录：目录布局、原子写、所有权与状态机）已实现；HTTP 路由与工作台页面尚未实现；跨轮对话只支持一次补充 |
 
 当前案件评估中的正常路径仍停在 `analyzing`，补件路径可到 `pending_documents`；已有人工决定接口不等于端到端审批已跑通。Agent 初审报告不依赖推进这些业务状态，也不能把报告确认写成供应商准入批准。
 
@@ -76,6 +76,10 @@ M3 已知限制（如实记录）：`qwen3.7-flash` 在补充案例上 5 次全�
 
 2026-09-15：M4 详细方案已定义，见 [M4 实施方案](project_docs/VendorGuard-M4实施方案.md)。M4 只把现有 CLI 审查链路接成受认证的单页工作台，不新增 Agent/RAG 能力，也不接案件、审批或 AVL。
 
-2026-09-15 M4-1 完成：新增 `src/vendorguard/review_application.py`（`ReviewCommand`、`ReviewRuntime`、`build_review_runtime()`、`run_review_round()`）——启动时装载模型配置、规则与检索数据一次，运行时按命令新建会话并执行一轮；`agent.py` 的 CLI 改接它，`main()` 内延迟导入应用层以避免 `agent` 与 `review_application` 的模块级环，仓库仍只有 `agent.py` 一条 `run_review()` 工具循环。CLI 对外行为不变，两处内部改动如实记录：材料检查移到装载依赖之前（扫描件不再牵连检索装载），第二轮改为"补充追加进命令后由应用层新建会话"。证据：`tests/unit/test_review_application.py` 8 项 + `tests/unit/test_agent_cli.py` 5 项，全量单测 353 通过（343 + 8 + 2），Ruff、格式检查与 mypy 全绿；真实启动路径实跑两次——模型端点指向死端口时先打印"已装载 22 条现行制度片段"再退 1，扫描件退 2、未装载检索、未发模型请求。本步不涉及数据库，集成测试未跑。当前唯一小功能是 M4-2：本地审查记录与单轮持久化。
+2026-09-15 M4-1 完成：新增 `src/vendorguard/review_application.py`（`ReviewCommand`、`ReviewRuntime`、`build_review_runtime()`、`run_review_round()`）——启动时装载模型配置、规则与检索数据一次，运行时按命令新建会话并执行一轮；`agent.py` 的 CLI 改接它，`main()` 内延迟导入应用层以避免 `agent` 与 `review_application` 的模块级环，仓库仍只有 `agent.py` 一条 `run_review()` 工具循环。CLI 对外行为不变，两处内部改动如实记录：材料检查移到装载依赖之前（扫描件不再牵连检索装载），第二轮改为"补充追加进命令后由应用层新建会话"。证据：`tests/unit/test_review_application.py` 8 项 + `tests/unit/test_agent_cli.py` 5 项，全量单测 353 通过（343 + 8 + 2），Ruff、格式检查与 mypy 全绿；真实启动路径实跑两次——模型端点指向死端口时先打印"已装载 22 条现行制度片段"再退 1，扫描件退 2、未装载检索、未发模型请求。本步不涉及数据库，集成测试未跑。
+
+2026-09-15 M4-2 完成：新增 `src/vendorguard/review_records.py`（525 行）——记录 Schema（`ReviewRecord`、`ReviewRoundRecord`、`ReviewFailure`、`ReviewFeedback`、`ReviewStatus`、列表用的 `ReviewSummary`）与 `LocalReviewStore`（`create`、`get_for_owner`、`read_material_bytes`、`mutate_for_owner`、`list_for_owner`）。契约按方案第 6 节：目录固定 `<root>/<review_id>/{material.pdf, record.json}`，`review_id` 只按 UUID 解析（路径片段按"记录不存在"处理）、上传文件名只作展示；`record.json` 带显式 `schema_version=1.0`、时间必须带时区，写盘先写同目录临时文件再 `os.replace` 原子替换（失败时旧记录不变并清理临时文件）；所有读写核对 `owner_user_id`，别人的、不存在的与非法 id 统一报 `ReviewNotFoundError`（路由据此统一 404）；同一 `review_id` 的"检查状态 + 写盘"在 `mutate_for_owner()` 的同一次临界区内（按 id 的 `threading.Lock`），原子替换之外再解决"丢失更新"；状态机 `running` → `completed`/`question`/`failed`，`question` 只能补充一次，只有 `completed` 能提交一次反馈且不可覆盖，重跑由 `create(retry_of_review_id=...)` 建新记录（资格判断留给 M4-4）。工具事件在建轮次与写盘两处执行 `sk-` 脱敏；`agent.py` 的脱敏函数公开为 `redact_secret` 供记录层复用同一条规则；`config.py` 新增 `review_data_dir`（默认 `var/reviews`），`.env.example` 与 `.gitignore` 同步。证据：新增 `tests/unit/test_review_records.py` 24 项与 `test_config.py` 2 项，全量单测 379 通过，Ruff、格式检查与 mypy 全绿；并发用例做过去锁对照（临时去掉串行锁该用例立刻失败），并做了一次真跨进程核对（进程 1 建档并保存一轮 answer，进程 2 另一个解释器读回轮次、报告、列表摘要与 2716 字节材料）。本步不涉及数据库，集成测试未跑。
+
+当前唯一小功能是 M4-3：受认证的发起、列表和详情接口。
 
 里程碑进度仅在 [Agent 开发计划](project_docs/VendorGuard-Agent开发计划.md) 更新，避免再维护多套看板。
