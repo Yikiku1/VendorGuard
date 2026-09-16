@@ -38,6 +38,7 @@ from vendorguard.review_records import (
     RECORD_FILENAME,
     REQUEST_EXCERPT_CHARS,
     LocalReviewStore,
+    ReviewFailure,
     ReviewNotFoundError,
     ReviewRecord,
     ReviewRoundRecord,
@@ -113,13 +114,18 @@ def with_material_record(store: LocalReviewStore, **kwargs) -> ReviewRecord:
     )
 
 
-def append_round(store: LocalReviewStore, record: ReviewRecord, round_record) -> ReviewRecord:
-    """在记录上追加一轮, 返回更新后的记录."""
+def append_round(
+    store: LocalReviewStore,
+    record: ReviewRecord,
+    round_record: ReviewRoundRecord,
+    failure: ReviewFailure | None = None,
+) -> ReviewRecord:
+    """在记录上追加一轮 (失败轮次同时带上 failure), 返回更新后的记录."""
 
     return store.mutate_for_owner(
         record.review_id,
         owner_user_id=record.owner_user_id,
-        mutate=lambda current: current.with_round(round_record),
+        mutate=lambda current: current.with_round(round_record, failure=failure),
     )
 
 
@@ -563,10 +569,20 @@ def test_tool_events_are_redacted_before_saving(store) -> None:
     )
     record = with_material_record(store)
 
-    saved = append_round(store, record, round_from(outcome, 1))
+    saved = append_round(
+        store,
+        record,
+        round_from(outcome, 1),
+        ReviewFailure(
+            code="agent_run_failed",
+            message=f"模型请求失败: 401 unauthorized {secret}",
+            retryable=True,
+        ),
+    )
 
+    # 工具事件在建轮次时就脱敏 (它会直接进响应); 整份 JSON 在写盘前再过一次,
+    # 覆盖失败文案这类由调用方给的字段
     assert saved.rounds[0].tool_events[0]["detail"].endswith("sk-***")
-    assert secret not in json.dumps(saved.model_dump(mode="json"), ensure_ascii=False)
     raw = (store.root / str(record.review_id) / RECORD_FILENAME).read_text(encoding="utf-8")
     assert secret not in raw
     assert "sk-***" in raw
@@ -676,3 +692,88 @@ def test_records_layer_has_no_database_dependency() -> None:
     assert "sqlalchemy" not in source
     assert "vendorguard.database" not in source
     assert "vendorguard.admission" not in source
+
+
+def test_failed_round_must_carry_its_failure(store) -> None:
+    """失败轮次必须同时给出 failure: 失败与报告不能只落一半.
+
+    失败轮次既有工具事件 (页面要展开出错的那一步), 也有 failure 里的稳定错误码;
+    两者必须同时写进同一次修改, 所以 with_round 对失败轮次强制要求 failure.
+    """
+
+    record = with_material_record(store)
+    failed_round = round_from(make_outcome("模型请求失败: Connection error.", kind="failed"), 1)
+
+    with pytest.raises(ReviewStateError):
+        record.with_round(failed_round)
+    with pytest.raises(ReviewStateError):
+        record.with_round(
+            round_from(question_outcome(), 1),
+            failure=ReviewFailure(code="agent_run_failed", message="不该出现", retryable=True),
+        )
+
+    saved = record.with_round(
+        failed_round,
+        failure=ReviewFailure(
+            code="agent_run_failed",
+            message="模型请求失败: Connection error.",
+            retryable=True,
+        ),
+    )
+
+    assert saved.status is ReviewStatus.FAILED
+    assert saved.failure is not None
+    assert saved.failure.code == "agent_run_failed"
+    assert saved.failure.retryable is True
+    assert saved.rounds[0].kind == "failed"
+
+
+def test_available_actions_follow_status_and_feedback(store) -> None:
+    """可执行动作由记录算出: 追问可补充, 完成可反馈, 可重试失败或已要求重查可重跑.
+
+    接口把这份动作原样放进详情的 `allowed_actions` 字段, 页面只显示这些按钮,
+    不在 JavaScript 里复制状态转换规则 (方案第 7 节).
+    """
+
+    fresh = with_material_record(store)
+    assert fresh.available_actions() == ()
+
+    question = question_record(store, now=NOW + timedelta(minutes=1))
+    assert question.available_actions() == ("supplement",)
+    assert question.with_supplement(SUPPLEMENT).available_actions() == ()
+
+    completed = completed_record(store, now=NOW + timedelta(minutes=2))
+    assert completed.available_actions() == ("feedback",)
+    assert completed.with_feedback(decision="confirmed", now=NOW).available_actions() == ()
+    assert completed.with_feedback(decision="recheck_requested", now=NOW).available_actions() == (
+        "rerun",
+    )
+
+    retryable_failure = failed_record(store, now=NOW + timedelta(minutes=3))
+    assert retryable_failure.available_actions() == ("rerun",)
+
+    not_retryable = store.mutate_for_owner(
+        with_material_record(store, now=NOW + timedelta(minutes=4)).review_id,
+        owner_user_id=OWNER,
+        mutate=lambda current: current.with_failure(
+            code="material_scanned_unsupported",
+            message="扫描件暂不支持",
+            retryable=False,
+        ),
+    )
+    assert not_retryable.available_actions() == ()
+
+
+def test_material_path_needs_the_owner(store) -> None:
+    """材料路径与材料字节一样核对所有者: 别人的记录拿不到路径."""
+
+    record = with_material_record(store)
+
+    path = store.material_path_for_owner(record.review_id, owner_user_id=OWNER)
+
+    assert path.name == MATERIAL_FILENAME
+    assert path.read_bytes() == demo_bytes()
+    with pytest.raises(ReviewNotFoundError):
+        store.material_path_for_owner(record.review_id, owner_user_id=OTHER_OWNER)
+    with pytest.raises(ReviewNotFoundError):
+        store.material_path_for_owner(uuid4(), owner_user_id=OWNER)

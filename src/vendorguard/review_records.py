@@ -62,6 +62,9 @@ REQUEST_EXCERPT_CHARS = 60
 # 临时文件与正式文件同目录, 保证 os.replace 是同文件系统上的原子操作.
 _TEMP_FILENAME = ".record.json.tmp"
 
+# 页面可执行的动作: 由记录状态算出, 作为详情响应的视图字段返回, 不写进 record.json.
+AllowedAction = Literal["supplement", "feedback", "rerun"]
+
 
 class ReviewStoreError(ValueError):
     """本地记录读写失败, 或记录内容与当前 Schema 不符时抛出的错误."""
@@ -212,11 +215,20 @@ class ReviewRecord(BaseModel):
             }
         )
 
-    def with_round(self, round_record: ReviewRoundRecord) -> ReviewRecord:
+    def with_round(
+        self,
+        round_record: ReviewRoundRecord,
+        *,
+        failure: ReviewFailure | None = None,
+    ) -> ReviewRecord:
         """追加一轮, 并按这一轮的结果推进状态.
 
         只有 `running` 的记录能追加轮次: `question` 状态下还没补充, `completed` 与
         `failed` 已经是一次运行的结果, 都不该再长出第二轮.
+
+        失败轮次必须同时给出 `failure`, 非失败轮次不能带它: 失败的工具事件 (页面要展开
+        出错的那一步) 与稳定错误码要么一起落盘, 要么都不落; 记录里失败与报告不会同时
+        存在.
         """
 
         if self.status is not ReviewStatus.RUNNING:
@@ -224,8 +236,17 @@ class ReviewRecord(BaseModel):
         expected = len(self.rounds) + 1
         if round_record.number != expected:
             raise ReviewStateError(f"轮次号必须是 {expected}, 收到 {round_record.number}")
-        status = _STATUS_BY_KIND[round_record.kind]
-        return self.model_copy(update={"rounds": (*self.rounds, round_record), "status": status})
+        if round_record.kind == "failed" and failure is None:
+            raise ReviewStateError("失败轮次必须同时给出 failure (错误码, 用户提示与能否重跑)")
+        if round_record.kind != "failed" and failure is not None:
+            raise ReviewStateError("非失败轮次不能带 failure")
+        updates: dict[str, Any] = {
+            "rounds": (*self.rounds, round_record),
+            "status": _STATUS_BY_KIND[round_record.kind],
+        }
+        if failure is not None:
+            updates["failure"] = failure
+        return self.model_copy(update=updates)
 
     def with_supplement(self, text: str) -> ReviewRecord:
         """登记一次用户补充: 只有追问后的记录能补充, 且只能补充一次."""
@@ -279,6 +300,29 @@ class ReviewRecord(BaseModel):
                 "status": ReviewStatus.FAILED,
             }
         )
+
+    def available_actions(self) -> tuple[AllowedAction, ...]:
+        """按当前状态给出可执行的动作, 供详情响应的 `allowed_actions` 字段使用.
+
+        页面只显示这些按钮, 不自己推导规则 (方案第 7 节):
+
+        - `supplement`: 追问后还没补充过, 可以补充一次 (一次补充的限制在状态机上);
+        - `feedback`: 报告已完成且还没反馈, 可以确认或要求重查;
+        - `rerun`: 可重试的失败, 或已要求重查的完成记录, 可以用原记录创建新的运行.
+        """
+
+        actions: list[AllowedAction] = []
+        if self.status is ReviewStatus.QUESTION and not self.supplements:
+            actions.append("supplement")
+        if self.status is ReviewStatus.COMPLETED and self.feedback is None:
+            actions.append("feedback")
+        retryable_failure = self.failure is not None and self.failure.retryable
+        recheck_requested = (
+            self.feedback is not None and self.feedback.decision == "recheck_requested"
+        )
+        if retryable_failure or recheck_requested:
+            actions.append("rerun")
+        return tuple(actions)
 
 
 class ReviewSummary(BaseModel):
@@ -372,12 +416,24 @@ class LocalReviewStore:
     def read_material_bytes(self, review_id: str | UUID, *, owner_user_id: UUID) -> bytes:
         """读取这条记录保存的原始材料字节, 供受保护的材料接口返回给页面."""
 
-        record = self._read_for_owner(review_id, owner_user_id=owner_user_id)
-        path = self._directory_for(record.review_id) / MATERIAL_FILENAME
+        path = self.material_path_for_owner(review_id, owner_user_id=owner_user_id)
         try:
             return path.read_bytes()
         except OSError as exc:
             raise ReviewStoreError(f"材料文件无法读取: {path}") from exc
+
+    def material_path_for_owner(self, review_id: str | UUID, *, owner_user_id: UUID) -> Path:
+        """给出这条记录保存的材料文件路径 (先核对所有者), 交给材料层去读它.
+
+        路径只在这里拼: 调用方拿到的是仓库给的路径, 不能自己按 review_id 拼, 也就不可能
+        绕开所有者检查读到别人的材料.
+        """
+
+        record = self._read_for_owner(review_id, owner_user_id=owner_user_id)
+        path = self._directory_for(record.review_id) / MATERIAL_FILENAME
+        if not path.is_file():
+            raise ReviewStoreError(f"材料文件不存在: {path}")
+        return path
 
     def mutate_for_owner(
         self,
@@ -512,6 +568,7 @@ __all__ = [
     "RECORD_FILENAME",
     "REQUEST_EXCERPT_CHARS",
     "SCHEMA_VERSION",
+    "AllowedAction",
     "LocalReviewStore",
     "ReviewFailure",
     "ReviewFeedback",

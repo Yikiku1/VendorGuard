@@ -1,9 +1,11 @@
 import logging
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID, uuid4
 
+from dotenv import dotenv_values
 from fastapi import (
     Depends,
     FastAPI,
@@ -25,6 +27,10 @@ from vendorguard.database import (
 )
 from vendorguard.dependencies import get_current_user
 from vendorguard.logging import bind_request_id, configure_json_logger
+from vendorguard.review_application import build_review_runtime
+from vendorguard.review_records import LocalReviewStore
+from vendorguard.review_routes import register_review_error_handlers
+from vendorguard.review_routes import router as review_router
 from vendorguard.security import (
     User,
     UserRole,
@@ -62,13 +68,20 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        """在应用启动和关闭时创建并释放数据库资源。"""
+        """在应用启动和关闭时创建并释放数据库与审查依赖。"""
 
         engine = create_database_engine(settings)
 
         try:
             app.state.database_engine = engine
             app.state.session_factory = create_session_factory(engine)
+            # M4: 审查依赖也在这里装载一次。片段清单、向量缓存或模型配置不可用就启动
+            # 失败, 不能让页面启动后把配置问题说成"制度里没有依据" (M4 方案 5.2)。
+            app.state.review_store = LocalReviewStore(settings.review_data_dir)
+            app.state.review_runtime = build_review_runtime(
+                {**dotenv_values(".env"), **os.environ},
+                app_settings=settings,
+            )
             yield
         finally:
             await engine.dispose()
@@ -189,5 +202,7 @@ def create_app() -> FastAPI:
 
         return {"status": "ok"}
 
+    register_review_error_handlers(app)
     app.include_router(admission_router)
+    app.include_router(review_router)
     return app

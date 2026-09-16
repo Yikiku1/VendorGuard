@@ -1,8 +1,8 @@
 # M4：形成可独立演示的审查工作台
 
 > 日期：2026-09-15。
-> 状态：M4-1、M4-2 已完成（2026-09-15），M4-3 待开始。
-> 当前唯一小功能：M4-3 受认证的发起、列表和详情接口（记录见[开发计划](VendorGuard-Agent开发计划.md)）。
+> 状态：M4-1、M4-2、M4-3 已完成（2026-09-16），M4-4 待开始。
+> 当前唯一小功能：M4-4 补充、反馈与重跑接口（记录见[开发计划](VendorGuard-Agent开发计划.md)）。
 > 上游依据：[PRD](VendorGuard-PRD.md) 的第一版范围与完成标准、
 > [Agent 开发计划](VendorGuard-Agent开发计划.md)和[M3 实施方案](VendorGuard-M3实施方案.md)。
 
@@ -383,6 +383,9 @@ Blob URL。页面资源放在 Python 包内，由 FastAPI 提供，不依赖 CDN
 完成判据：不用 FastAPI 也能创建一条本地审查、保存一轮结果、重启进程后重新读取。
 
 ### M4-3：受认证的发起、列表和详情接口
+
+状态：已完成（2026-09-16）。接口契约、错误码、`allowed_actions` 口径与真实登录实跑
+见[开发计划](VendorGuard-Agent开发计划.md) 的 M4-3 完成记录。
 
 修改范围：`review_routes.py`、`app.py`、依赖及 HTTP 测试。
 

@@ -17,6 +17,7 @@ dependencies = [
     "pyjwt>=2.13.0",
     "pypdf>=6.18.1",
     "python-dotenv>=1.2.3",
+    "python-multipart>=0.0.32",
     "pyyaml>=6.0.3",
     "sqlalchemy[asyncio]>=2.0.52",
     "uvicorn>=0.52.4",
