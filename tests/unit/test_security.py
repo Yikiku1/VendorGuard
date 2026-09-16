@@ -161,7 +161,7 @@ def test_create_access_token_requires_jwt_secret() -> None:
         create_access_token(user, settings)
 
 
-async def test_seed_demo_users_creates_only_mvp_accounts() -> None:
+async def test_seed_demo_users_creates_the_demo_accounts() -> None:
     specialist_password = _demo_password("specialist")
     manager_password = _demo_password("manager")
     settings = Settings(
@@ -181,9 +181,11 @@ async def test_seed_demo_users_creates_only_mvp_accounts() -> None:
     assert set(users_by_username) == {
         "demo.specialist",
         "demo.manager",
+        "admin",
     }
     assert users_by_username["demo.specialist"].role == UserRole.PROCUREMENT_SPECIALIST
     assert users_by_username["demo.manager"].role == UserRole.PROCUREMENT_MANAGER
+    assert users_by_username["admin"].role == UserRole.ADMIN
     assert verify_password(
         specialist_password,
         users_by_username["demo.specialist"].password_hash,
@@ -192,7 +194,55 @@ async def test_seed_demo_users_creates_only_mvp_accounts() -> None:
         manager_password,
         users_by_username["demo.manager"].password_hash,
     )
+    # 没单独配置管理员口令时沿用演示专员的口令 (演示时少记一个)
+    assert verify_password(
+        specialist_password,
+        users_by_username["admin"].password_hash,
+    )
     session.add_all.assert_called_once_with(created_users)
+
+
+async def test_seed_demo_users_treats_a_blank_admin_password_as_unset() -> None:
+    """VENDORGUARD_DEMO_ADMIN_PASSWORD 留空时视作未配置: 管理员沿用演示专员的口令."""
+
+    specialist_password = _demo_password("specialist")
+    settings = Settings(
+        demo_specialist_password=SecretStr(specialist_password),
+        demo_manager_password=SecretStr(_demo_password("manager")),
+        demo_admin_password=SecretStr(""),
+    )
+
+    session = AsyncMock(spec=AsyncSession)
+    existing_usernames = Mock()
+    existing_usernames.all.return_value = []
+    session.scalars.return_value = existing_usernames
+
+    created_users = await seed_demo_users(session, settings)
+
+    admin_user = next(user for user in created_users if user.username == "admin")
+    assert verify_password(specialist_password, admin_user.password_hash)
+
+
+async def test_seed_demo_users_uses_a_separate_admin_password_when_configured() -> None:
+    """配置了 VENDORGUARD_DEMO_ADMIN_PASSWORD 时, 管理员用自己的口令."""
+
+    admin_password = _demo_password("admin")
+    settings = Settings(
+        demo_specialist_password=SecretStr(_demo_password("specialist")),
+        demo_manager_password=SecretStr(_demo_password("manager")),
+        demo_admin_password=SecretStr(admin_password),
+    )
+
+    session = AsyncMock(spec=AsyncSession)
+    existing_usernames = Mock()
+    existing_usernames.all.return_value = []
+    session.scalars.return_value = existing_usernames
+
+    created_users = await seed_demo_users(session, settings)
+
+    admin_user = next(user for user in created_users if user.username == "admin")
+    assert admin_user.role == UserRole.ADMIN
+    assert verify_password(admin_password, admin_user.password_hash)
 
 
 async def test_seed_demo_users_requires_manager_password() -> None:
@@ -227,6 +277,7 @@ async def test_seed_demo_users_skips_existing_accounts() -> None:
     existing_usernames.all.return_value = [
         "demo.specialist",
         "demo.manager",
+        "admin",
     ]
     session.scalars.return_value = existing_usernames
 

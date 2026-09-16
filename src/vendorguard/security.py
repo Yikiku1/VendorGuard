@@ -141,11 +141,16 @@ async def seed_demo_users(
     session: AsyncSession,
     settings: Settings,
 ) -> list[User]:
-    """幂等创建采购专员和采购经理两个演示账号。"""
+    """幂等创建演示账号: 采购专员, 采购经理, 以及演示与开发用的管理员.
+
+    管理员账号的口令默认沿用演示专员的口令 (演示时少记一个); 想给它单独的口令就设
+    `VENDORGUARD_DEMO_ADMIN_PASSWORD`。只补齐缺失的账号, 已存在的原样不动。
+    """
 
     if settings.demo_specialist_password is None or settings.demo_manager_password is None:
         raise RuntimeError("必须配置演示账号密码")
 
+    admin_password = settings.demo_admin_password or settings.demo_specialist_password
     account_specs = (
         (
             "demo.specialist",
@@ -156,6 +161,11 @@ async def seed_demo_users(
             "demo.manager",
             UserRole.PROCUREMENT_MANAGER,
             settings.demo_manager_password,
+        ),
+        (
+            "admin",
+            UserRole.ADMIN,
+            admin_password,
         ),
     )
     usernames = tuple(username for username, _, _ in account_specs)

@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(default=30, ge=1, le=1440)
     demo_specialist_password: SecretStr | None = None
     demo_manager_password: SecretStr | None = None
+    # 演示与开发用的管理员账号 (admin)。不配置时与演示专员同密码, 少记一个口令;
+    # 想给它单独的口令就在 .env 里设 VENDORGUARD_DEMO_ADMIN_PASSWORD。
+    demo_admin_password: SecretStr | None = None
 
     # 制度检索的 embedding 配置: 模型名与正文向量缓存位置。
     # 缓存是调用付费接口算出的派生物, 不入库, 指纹不符时整份重建。
