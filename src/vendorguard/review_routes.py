@@ -9,17 +9,16 @@ M4 方案第 7 节. 所有接口都走现有 Bearer Token (`get_current_user`); 
 一轮审查是同步的: 用 `run_in_threadpool()` 把它放到线程里跑, 不阻塞事件循环 (方案 4.2).
 记录仓库的读写是本地小文件操作, 直接调用.
 
-错误体统一成 `{"error": {"code", "message", "retryable"}, "request_id"}` (方案 7.5):
-本步用到的是未认证 (401), 参数错误 (400), 上传过大 (413) 与记录不存在 (404); 补充与
-反馈接口在 M4-4 接入同一套错误体, 那时的状态冲突用 409. 认证与其它既有接口的错误形状
-不受影响——它们不是 M4 的接口.
+补充, 反馈与重跑也都走同一套错误体 (方案 7.5): 未认证 401, 参数错误 400,
+上传过大 413, 记录不存在 404, 状态冲突 409. 认证与其它既有接口的错误形状不受影响——
+它们不是 M4 的接口.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from fastapi import (
@@ -45,7 +44,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .agent import AgentRunOutcome
 from .dependencies import get_current_user
-from .materials import MaterialReadError, read_text_pdf
+from .materials import MaterialDocument, MaterialReadError, read_text_pdf
 from .review_application import ReviewCommand, ReviewRuntime, run_review_round
 from .review_records import (
     AllowedAction,
@@ -54,6 +53,7 @@ from .review_records import (
     ReviewNotFoundError,
     ReviewRecord,
     ReviewRoundRecord,
+    ReviewStateError,
     ReviewStatus,
     ReviewStoreError,
     ReviewSummary,
@@ -68,6 +68,9 @@ MAX_REQUEST_TEXT_CHARS = 1000
 MIN_LIST_LIMIT = 1
 MAX_LIST_LIMIT = 50
 DEFAULT_LIST_LIMIT = 20
+# 方案 7.3 与 7.4: 补充原文 1..2000 字, 反馈备注最长 1000 字.
+MAX_SUPPLEMENT_TEXT_CHARS = 2000
+MAX_FEEDBACK_COMMENT_CHARS = 1000
 
 # 材料层的失败码 → 记录里的稳定错误码与用户提示. 重跑同一份字节没有意义, 所以材料
 # 问题一律 retryable=False: 用户要用另一份材料发起新的审查.
@@ -142,6 +145,29 @@ class ReviewListItem(BaseModel):
         )
 
 
+class SupplementRequest(BaseModel):
+    """一次补充的请求体: 原文由用户提供, 按原样保存 (方案 7.3)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+
+
+class FeedbackRequest(BaseModel):
+    """报告反馈的请求体: 只有确认或要求重查两种, 备注可为空 (方案 7.4)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["confirmed", "recheck_requested"]
+    comment: str = ""
+
+
+class ReviewFeedbackResponse(ReviewDetail):
+    """反馈响应: 记录视图 + 明确写出"没有改动任何业务状态" (方案 7.4)."""
+
+    business_state_changed: bool = False
+
+
 router = APIRouter(prefix=REVIEW_PATH_PREFIX, tags=["审查工作台"])
 
 
@@ -184,50 +210,7 @@ async def create_review(
         original_filename=_display_filename(material),
         material_bytes=payload,
     )
-
-    try:
-        document = read_text_pdf(
-            store.material_path_for_owner(record.review_id, owner_user_id=user.id)
-        )
-    except MaterialReadError as exc:
-        code, message = _material_failure(exc)
-        failed = store.mutate_for_owner(
-            record.review_id,
-            owner_user_id=user.id,
-            mutate=lambda current: current.with_failure(
-                code=code, message=message, retryable=False
-            ),
-        )
-        return _detail(failed)
-
-    record = store.mutate_for_owner(
-        record.review_id,
-        owner_user_id=user.id,
-        mutate=lambda current: current.with_material(document),
-    )
-
-    started_at = datetime.now(UTC)
-    command = ReviewCommand(
-        user_request=record.request_text,
-        reference_date=record.reference_date,
-        material=document,
-    )
-    outcome = await run_in_threadpool(run_review_round, command, runtime=runtime)
-    finished_at = datetime.now(UTC)
-
-    round_record = ReviewRoundRecord.from_outcome(
-        outcome,
-        number=len(record.rounds) + 1,
-        model=runtime.model_name,
-        started_at=started_at,
-        finished_at=finished_at,
-    )
-    saved = store.mutate_for_owner(
-        record.review_id,
-        owner_user_id=user.id,
-        mutate=lambda current: current.with_round(round_record, failure=_agent_failure(outcome)),
-    )
-    return _detail(saved)
+    return await _run_first_round(store=store, runtime=runtime, record=record, user=user)
 
 
 @router.get("", response_model=list[ReviewListItem])
@@ -272,6 +255,98 @@ async def read_review_material(
     except ReviewStoreError as exc:
         raise _store_error(exc) from exc
     return Response(content=payload, media_type="application/pdf")
+
+
+@router.post("/{review_id}/supplements", response_model=ReviewDetail)
+async def add_supplement(
+    review_id: str,
+    body: SupplementRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    store: Annotated[LocalReviewStore, Depends(get_review_store)],
+    runtime: Annotated[ReviewRuntime, Depends(get_review_runtime)],
+) -> ReviewDetail:
+    """提交一次补充并重新跑一轮: 只有追问中的记录能补充, 且只能补充一次.
+
+    这一轮重新读取材料, 重新校验并重新检索 (方案 7.3); 第一轮的追问保留在记录里,
+    第二轮只带自己的检索结果与引用.
+    """
+
+    record = _read_for_owner(store, review_id, user)
+    text = _validated_supplement_text(body.text)
+    running = _mutate_or_conflict(
+        store,
+        record,
+        user,
+        lambda current: current.with_supplement(text),
+    )
+    document, running = _load_material(store, running, user)
+    if document is None:
+        return _detail(running)
+    saved = await _execute_round(store, runtime, running, document)
+    return _detail(saved)
+
+
+@router.post("/{review_id}/feedback", response_model=ReviewFeedbackResponse)
+async def submit_feedback(
+    review_id: str,
+    body: FeedbackRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    store: Annotated[LocalReviewStore, Depends(get_review_store)],
+) -> ReviewFeedbackResponse:
+    """提交一次报告反馈: 只有完成的报告能反馈, 一次且不能覆盖.
+
+    反馈只表示"用户看过并接受了这份报告": 它不改记录状态, 也不调用任何准入或审批接口.
+    """
+
+    record = _read_for_owner(store, review_id, user)
+    comment = _validated_feedback_comment(body.comment)
+    reviewed = _mutate_or_conflict(
+        store,
+        record,
+        user,
+        lambda current: current.with_feedback(decision=body.decision, comment=comment),
+    )
+    return _feedback_response(reviewed)
+
+
+@router.post(
+    "/{review_id}/reruns",
+    response_model=ReviewDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+async def rerun_review(
+    review_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    store: Annotated[LocalReviewStore, Depends(get_review_store)],
+    runtime: Annotated[ReviewRuntime, Depends(get_review_runtime)],
+) -> ReviewDetail:
+    """用原记录的材料与请求创建一条新记录并重新跑, 旧记录保持不变.
+
+    只有可重试的失败, 或已要求重查的完成记录能重跑 (方案 7.4): 判定用记录自己算出的
+    可执行动作, 与页面显示重跑按钮的条件完全一致. 接口不接受模型, 路径或状态参数——
+    材料从本地保存的那一份复制, 请求与参考日期照抄旧记录.
+    """
+
+    source = _read_for_owner(store, review_id, user)
+    if "rerun" not in source.available_actions():
+        raise ReviewApiError(
+            status_code=status.HTTP_409_CONFLICT,
+            code="state_conflict",
+            message="这条记录不能重跑: 只有可重试的失败或已要求重查的完成记录能创建新运行",
+        )
+    try:
+        payload = store.read_material_bytes(source.review_id, owner_user_id=user.id)
+    except ReviewStoreError as exc:
+        raise _store_error(exc) from exc
+    record = store.create(
+        owner_user_id=user.id,
+        request_text=source.request_text,
+        reference_date=source.reference_date,
+        original_filename=source.original_filename,
+        material_bytes=payload,
+        retry_of_review_id=source.review_id,
+    )
+    return await _run_first_round(store=store, runtime=runtime, record=record, user=user)
 
 
 def register_review_error_handlers(app: FastAPI) -> None:
@@ -354,6 +429,147 @@ def _error_response(
         },
         headers=headers,
     )
+
+
+async def _run_first_round(
+    *,
+    store: LocalReviewStore,
+    runtime: ReviewRuntime,
+    record: ReviewRecord,
+    user: User,
+) -> ReviewDetail:
+    """在刚创建的记录上跑第一轮: 读材料, 登记身份, 跑一轮, 追加轮次.
+
+    材料读不出来时把失败写进记录并返回——调用方看到的是 failed 记录, 不是 4xx.
+    """
+
+    document, record = _load_material(store, record, user)
+    if document is None:
+        return _detail(record)
+    record = store.mutate_for_owner(
+        record.review_id,
+        owner_user_id=user.id,
+        mutate=lambda current: current.with_material(document),
+    )
+    saved = await _execute_round(store, runtime, record, document)
+    return _detail(saved)
+
+
+async def _execute_round(
+    store: LocalReviewStore,
+    runtime: ReviewRuntime,
+    record: ReviewRecord,
+    document: MaterialDocument,
+) -> ReviewRecord:
+    """在本地线程里跑一轮并把结果追加到记录; 失败轮次带上 failure."""
+
+    started_at = datetime.now(UTC)
+    command = ReviewCommand(
+        user_request=record.request_text,
+        reference_date=record.reference_date,
+        material=document,
+        supplements=record.supplements,
+    )
+    outcome = await run_in_threadpool(run_review_round, command, runtime=runtime)
+    finished_at = datetime.now(UTC)
+
+    round_record = ReviewRoundRecord.from_outcome(
+        outcome,
+        number=len(record.rounds) + 1,
+        model=runtime.model_name,
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+    return store.mutate_for_owner(
+        record.review_id,
+        owner_user_id=record.owner_user_id,
+        mutate=lambda current: current.with_round(round_record, failure=_agent_failure(outcome)),
+    )
+
+
+def _load_material(
+    store: LocalReviewStore,
+    record: ReviewRecord,
+    user: User,
+) -> tuple[MaterialDocument | None, ReviewRecord]:
+    """读这份保存的材料: 读不出来就把失败写进记录, 返回 (None, 失败后的记录)."""
+
+    try:
+        document = read_text_pdf(
+            store.material_path_for_owner(record.review_id, owner_user_id=user.id)
+        )
+    except MaterialReadError as exc:
+        code, message = _material_failure(exc)
+        failed = store.mutate_for_owner(
+            record.review_id,
+            owner_user_id=user.id,
+            mutate=lambda current: current.with_failure(
+                code=code, message=message, retryable=False
+            ),
+        )
+        return None, failed
+    return document, record
+
+
+def _mutate_or_conflict(
+    store: LocalReviewStore,
+    record: ReviewRecord,
+    user: User,
+    mutate: Callable[[ReviewRecord], ReviewRecord],
+) -> ReviewRecord:
+    """执行一次状态转换: 状态不符时按 409 报出, 且不写盘."""
+
+    try:
+        return store.mutate_for_owner(record.review_id, owner_user_id=user.id, mutate=mutate)
+    except ReviewStateError as exc:
+        raise _state_conflict(exc) from exc
+
+
+def _feedback_response(record: ReviewRecord) -> ReviewFeedbackResponse:
+    """反馈响应: 记录视图 + 明确写出没有改动业务状态."""
+
+    detail = _detail(record)
+    return ReviewFeedbackResponse(**detail.model_dump(), business_state_changed=False)
+
+
+def _state_conflict(exc: ReviewStateError) -> ReviewApiError:
+    """非法状态转换 → 409: 消息直接用记录层给的理由, 它已经是给用户看的话."""
+
+    return ReviewApiError(
+        status_code=status.HTTP_409_CONFLICT,
+        code="state_conflict",
+        message=str(exc),
+    )
+
+
+def _validated_supplement_text(text: str) -> str:
+    """补充原文: 去空白后非空, 长度不超过 2000 字; 原文按原样保存, 不摘要不改写."""
+
+    if not text.strip():
+        raise ReviewApiError(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="invalid_request",
+            message="补充内容不能为空",
+        )
+    if len(text) > MAX_SUPPLEMENT_TEXT_CHARS:
+        raise ReviewApiError(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="invalid_request",
+            message=f"补充内容最多 {MAX_SUPPLEMENT_TEXT_CHARS} 个字符",
+        )
+    return text
+
+
+def _validated_feedback_comment(comment: str) -> str:
+    """反馈备注可以为空, 但最长 1000 字."""
+
+    if len(comment) > MAX_FEEDBACK_COMMENT_CHARS:
+        raise ReviewApiError(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="invalid_request",
+            message=f"反馈备注最多 {MAX_FEEDBACK_COMMENT_CHARS} 个字符",
+        )
+    return comment
 
 
 async def _read_upload(material: UploadFile | None) -> bytes:
@@ -478,9 +694,12 @@ def _detail(record: ReviewRecord) -> ReviewDetail:
 __all__ = [
     "DEFAULT_LIST_LIMIT",
     "MAX_UPLOAD_BYTES",
+    "FeedbackRequest",
     "ReviewApiError",
     "ReviewDetail",
+    "ReviewFeedbackResponse",
     "ReviewListItem",
+    "SupplementRequest",
     "get_review_runtime",
     "get_review_store",
     "register_review_error_handlers",

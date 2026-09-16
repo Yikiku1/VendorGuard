@@ -12,7 +12,7 @@ M4 方案第 7 节. 这些用例**不连数据库也不打真实模型**: 认证
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -26,8 +26,14 @@ from vendorguard.agent import AgentRunOutcome
 from vendorguard.agent_report import Finding, ReviewReport
 from vendorguard.app import create_app
 from vendorguard.dependencies import get_current_user
+from vendorguard.materials import read_text_pdf
 from vendorguard.review_application import ReviewCommand
-from vendorguard.review_records import MATERIAL_FILENAME, LocalReviewStore
+from vendorguard.review_records import (
+    MATERIAL_FILENAME,
+    LocalReviewStore,
+    ReviewFailure,
+    ReviewRoundRecord,
+)
 from vendorguard.review_routes import MAX_UPLOAD_BYTES, get_review_runtime, get_review_store
 from vendorguard.security import UserRole
 
@@ -487,3 +493,307 @@ def test_detail_keeps_timestamps_and_material_identity(
     assert body["rounds"][0]["finished_at"] >= body["rounds"][0]["started_at"]
     assert body["updated_at"] >= body["created_at"]
     assert len(payload) > 0
+
+
+# ---------------------------------------------------------------------------
+# M4-4: 补充, 反馈与重跑
+# ---------------------------------------------------------------------------
+
+SETUP_TIME = datetime(2026, 9, 16, 9, 0, tzinfo=UTC)
+SUPPLEMENT_TEXT = "补充说明: 营业执照有效期至 2030年01月31日"
+QUESTION_TEXT = "请提供营业执照有效期截止日?"
+FAILURE_TEXT = "模型请求失败: Connection error."
+
+
+def store_round(outcome: AgentRunOutcome, number: int) -> ReviewRoundRecord:
+    """把替身产出转成记录里的一轮, 时间戳固定便于断言."""
+
+    return ReviewRoundRecord.from_outcome(
+        outcome,
+        number=number,
+        model="setup-model",
+        started_at=SETUP_TIME,
+        finished_at=SETUP_TIME,
+    )
+
+
+def prepare_record(
+    fixture: ReviewApiFixture,
+    outcome: AgentRunOutcome,
+    *,
+    owner: UUID = OWNER,
+    retryable_failure: bool = True,
+) -> str:
+    """直接在仓库里把一条记录推到指定状态, 返回 review_id.
+
+    接口用例需要一个已知状态的起点 (追问中 / 已完成 / 失败), 不必每次都从 HTTP 走一遍:
+    建档 -> 按固定布局读回材料并登记身份 -> 落一轮结果 (失败轮次同时写 failure).
+    """
+
+    store = fixture.store
+    record = store.create(
+        owner_user_id=owner,
+        request_text=REQUEST_TEXT,
+        reference_date=date(2026, 9, 1),
+        original_filename="license_complete.pdf",
+        material_bytes=(MATERIALS_DIR / "license_complete.pdf").read_bytes(),
+    )
+    document = read_text_pdf(store.material_path_for_owner(record.review_id, owner_user_id=owner))
+    record = store.mutate_for_owner(
+        record.review_id,
+        owner_user_id=owner,
+        mutate=lambda current: current.with_material(document),
+    )
+    if outcome.kind == "failed":
+        failure = ReviewFailure(
+            code="agent_run_failed", message=outcome.text, retryable=retryable_failure
+        )
+        return str(
+            store.mutate_for_owner(
+                record.review_id,
+                owner_user_id=owner,
+                mutate=lambda current: current.with_round(store_round(outcome, 1), failure=failure),
+            ).review_id
+        )
+    return str(
+        store.mutate_for_owner(
+            record.review_id,
+            owner_user_id=owner,
+            mutate=lambda current: current.with_round(store_round(outcome, 1)),
+        ).review_id
+    )
+
+
+def test_supplement_runs_the_second_round_and_keeps_the_first(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """补充: 追问轮保留, 第二轮带上补充原文重跑, 结论来自第二轮."""
+
+    fixture = api_client(tmp_path, outcome=answer_outcome(), monkeypatch=monkeypatch)
+    review_id = prepare_record(fixture, make_outcome(QUESTION_TEXT, kind="question"))
+
+    with fixture.client as client:
+        response = client.post(
+            f"/api/reviews/{review_id}/supplements", json={"text": SUPPLEMENT_TEXT}
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["supplements"] == [SUPPLEMENT_TEXT]
+    assert [item["kind"] for item in body["rounds"]] == ["question", "answer"]
+    assert body["rounds"][0]["text"] == QUESTION_TEXT
+    assert body["rounds"][0]["report"] is None
+    assert body["rounds"][1]["report"]["findings"][0]["policy_citations"] == [NODE_KEY]
+    assert body["rounds"][1]["model"] == "fake-model"
+    assert body["allowed_actions"] == ["feedback"]
+
+    # 第二轮是带着补充原文重新跑的一轮, 材料还是保存的那一份
+    command = fixture.model.calls[-1]
+    assert command.supplements == (SUPPLEMENT_TEXT,)
+    assert command.material.sha256 == body["material_sha256"]
+    assert command.user_request == REQUEST_TEXT
+
+
+def test_supplement_is_allowed_once_and_only_while_waiting(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """补充只在 question 状态可用且只能一次: 第一次补充后记录已离开 question."""
+
+    fixture = api_client(tmp_path, outcome=answer_outcome(), monkeypatch=monkeypatch)
+    review_id = prepare_record(fixture, make_outcome(QUESTION_TEXT, kind="question"))
+
+    with fixture.client as client:
+        first = client.post(f"/api/reviews/{review_id}/supplements", json={"text": SUPPLEMENT_TEXT})
+        second = client.post(f"/api/reviews/{review_id}/supplements", json={"text": "再补一条"})
+        after_rounds = client.get(f"/api/reviews/{review_id}").json()["rounds"]
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "state_conflict"
+    assert len(after_rounds) == 2  # 被拒的补充没有长出新的一轮
+
+
+@pytest.mark.parametrize("text", ["", "   ", "补" * 2001])
+def test_supplement_text_is_validated(tmp_path: Path, monkeypatch: MonkeyPatch, text: str) -> None:
+    """补充原文长度 1..2000, 空白不算内容: 参数错误一律 400 且不跑第二轮."""
+
+    fixture = api_client(tmp_path, outcome=answer_outcome(), monkeypatch=monkeypatch)
+    review_id = prepare_record(fixture, make_outcome(QUESTION_TEXT, kind="question"))
+
+    with fixture.client as client:
+        response = client.post(f"/api/reviews/{review_id}/supplements", json={"text": text})
+        rounds = client.get(f"/api/reviews/{review_id}").json()["rounds"]
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+    assert len(rounds) == 1
+    assert fixture.model.calls == []
+
+
+def test_feedback_is_recorded_once_and_does_not_touch_business_state(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """反馈: 完成报告才能提交, 只记一次, 且明确不改动业务状态."""
+
+    fixture = api_client(tmp_path, outcome=answer_outcome(), monkeypatch=monkeypatch)
+    review_id = prepare_record(fixture, answer_outcome())
+
+    with fixture.client as client:
+        response = client.post(
+            f"/api/reviews/{review_id}/feedback",
+            json={"decision": "confirmed", "comment": "来源与报告内容已核对"},
+        )
+        again = client.post(
+            f"/api/reviews/{review_id}/feedback", json={"decision": "recheck_requested"}
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["feedback"]["decision"] == "confirmed"
+    assert body["feedback"]["comment"] == "来源与报告内容已核对"
+    assert body["business_state_changed"] is False
+    assert body["status"] == "completed"
+    assert body["allowed_actions"] == []
+    assert again.status_code == 409
+    assert again.json()["error"]["code"] == "state_conflict"
+
+
+def test_feedback_requires_a_completed_report_and_valid_input(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """非完成状态不能反馈; 非法 decision 与超长备注都是参数错误."""
+
+    fixture = api_client(tmp_path, outcome=answer_outcome(), monkeypatch=monkeypatch)
+    waiting = prepare_record(fixture, make_outcome(QUESTION_TEXT, kind="question"))
+    completed = prepare_record(fixture, answer_outcome())
+
+    with fixture.client as client:
+        not_completed = client.post(
+            f"/api/reviews/{waiting}/feedback", json={"decision": "confirmed"}
+        )
+        bad_decision = client.post(
+            f"/api/reviews/{completed}/feedback", json={"decision": "approved"}
+        )
+        long_comment = client.post(
+            f"/api/reviews/{completed}/feedback",
+            json={"decision": "confirmed", "comment": "备注" * 600},
+        )
+
+    assert not_completed.status_code == 409
+    assert not_completed.json()["error"]["code"] == "state_conflict"
+    assert bad_decision.status_code == 400
+    assert bad_decision.json()["error"]["code"] == "invalid_request"
+    assert long_comment.status_code == 400
+    assert long_comment.json()["error"]["code"] == "invalid_request"
+
+
+def test_rerun_creates_a_new_record_and_keeps_the_old_failure(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """重跑: 新 review_id + retry_of_review_id, 旧记录的失败与轮次一点不变."""
+
+    fixture = api_client(tmp_path, outcome=answer_outcome(), monkeypatch=monkeypatch)
+    failed_id = prepare_record(fixture, make_outcome(FAILURE_TEXT, kind="failed"))
+
+    with fixture.client as client:
+        before = client.get(f"/api/reviews/{failed_id}").json()
+        created = client.post(f"/api/reviews/{failed_id}/reruns")
+        body = created.json()
+        after = client.get(f"/api/reviews/{failed_id}").json()
+        new_material = client.get(f"/api/reviews/{body['review_id']}/material")
+        old_material = client.get(f"/api/reviews/{failed_id}/material")
+
+    assert created.status_code == 201
+    assert body["review_id"] != failed_id
+    assert body["retry_of_review_id"] == failed_id
+    assert body["status"] == "completed"
+    assert body["request_text"] == REQUEST_TEXT
+    assert body["original_filename"] == "license_complete.pdf"
+    assert body["material_id"] == "material"
+    assert body["page_count"] == 1
+    assert body["material_sha256"] == before["material_sha256"]
+    assert new_material.content == old_material.content
+    # 旧记录一点没变: 失败与轮次都还在
+    assert after == before
+    assert after["status"] == "failed"
+    assert after["failure"]["message"] == FAILURE_TEXT
+
+
+def test_rerun_requires_a_retryable_failure_or_a_recheck_request(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """只有可重试失败或已要求重查的完成记录能重跑; 扫描件不可重跑."""
+
+    fixture = api_client(tmp_path, outcome=answer_outcome(), monkeypatch=monkeypatch)
+    scanned_id = prepare_record(
+        fixture, make_outcome("扫描件暂不支持", kind="failed"), retryable_failure=False
+    )
+    completed_id = prepare_record(fixture, answer_outcome())
+    recheck_id = prepare_record(fixture, answer_outcome())
+
+    with fixture.client as client:
+        client.post(f"/api/reviews/{recheck_id}/feedback", json={"decision": "recheck_requested"})
+        scanned = client.post(f"/api/reviews/{scanned_id}/reruns")
+        plain_completed = client.post(f"/api/reviews/{completed_id}/reruns")
+        recheck = client.post(f"/api/reviews/{recheck_id}/reruns")
+
+    assert scanned.status_code == 409
+    assert scanned.json()["error"]["code"] == "state_conflict"
+    assert plain_completed.status_code == 409
+    assert recheck.status_code == 201
+    assert recheck.json()["retry_of_review_id"] == recheck_id
+
+
+def test_rerun_ignores_client_supplied_overrides(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    """重跑不接受自选模型, 路径或业务状态: 请求体里的这些字段一概不生效."""
+
+    fixture = api_client(tmp_path, outcome=answer_outcome(), monkeypatch=monkeypatch)
+    failed_id = prepare_record(fixture, make_outcome(FAILURE_TEXT, kind="failed"))
+    source_sha256 = fixture.store.get_for_owner(failed_id, owner_user_id=OWNER).material_sha256
+
+    with fixture.client as client:
+        created = client.post(
+            f"/api/reviews/{failed_id}/reruns",
+            json={
+                "model": "evil-model",
+                "status": "completed",
+                "material_path": "C:/evil.pdf",
+                "request_text": "换一个请求",
+                "reference_date": "2030-01-01",
+            },
+        )
+
+    assert created.status_code == 201
+    body = created.json()
+    assert body["request_text"] == REQUEST_TEXT
+    assert body["reference_date"] == date(2026, 9, 1).isoformat()
+    assert body["material_sha256"] == source_sha256
+    assert body["rounds"][0]["model"] == "fake-model"
+    assert body["status"] == "completed"
+
+
+def test_supplement_feedback_and_rerun_need_ownership(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """三个写接口都核对所有者: 别人的记录一律 404, 且不改动任何记录."""
+
+    fixture = api_client(tmp_path, outcome=answer_outcome(), monkeypatch=monkeypatch)
+    waiting = prepare_record(fixture, make_outcome(QUESTION_TEXT, kind="question"))
+    completed = prepare_record(fixture, answer_outcome())
+    failed = prepare_record(fixture, make_outcome(FAILURE_TEXT, kind="failed"))
+
+    other = api_client(tmp_path, owner=OTHER_OWNER, monkeypatch=monkeypatch)
+    with other.client as client:
+        supplements = client.post(
+            f"/api/reviews/{waiting}/supplements", json={"text": SUPPLEMENT_TEXT}
+        )
+        feedback = client.post(f"/api/reviews/{completed}/feedback", json={"decision": "confirmed"})
+        rerun = client.post(f"/api/reviews/{failed}/reruns")
+
+    for response in (supplements, feedback, rerun):
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "review_not_found"
+    assert fixture.store.get_for_owner(waiting, owner_user_id=OWNER).status.value == "question"
+    assert fixture.store.get_for_owner(completed, owner_user_id=OWNER).feedback is None
+    assert len(fixture.store.list_for_owner(owner_user_id=OWNER)) == 3
