@@ -37,6 +37,7 @@ from vendorguard.security import (
     authenticate_user,
     create_access_token,
 )
+from vendorguard.workbench import router as workbench_router
 
 
 class LoginRequest(BaseModel):
@@ -205,4 +206,5 @@ def create_app() -> FastAPI:
     register_review_error_handlers(app)
     app.include_router(admission_router)
     app.include_router(review_router)
+    app.include_router(workbench_router)
     return app

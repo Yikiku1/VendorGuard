@@ -1696,6 +1696,14 @@ def test_search_round_trip_hands_citable_nodes_to_the_model(policy) -> None:
     assert search_event["detail"]["returned_nodes"] == [item.node_key for item in index.records]
     assert search_event["detail"]["query"] == "关键物料可以先准入后补交质量证书吗"
     assert search_event["detail"]["as_of"] == "2026-09-01"
+    # 页面要展开制度引用: 事件里必须带本次返回条款的标题, 定位与原文 (M4 方案 4.5),
+    # 查看时不能重新检索; chunk_key 是召回编号, 不进这份证据
+    nodes = search_event["detail"]["nodes"]
+    assert [item["node_key"] for item in nodes] == [item.node_key for item in index.records]
+    assert nodes[0]["title"] == index.records[0].locator_path[0]
+    assert nodes[0]["locator"] == list(index.records[0].locator_path)
+    assert nodes[0]["text"] == index.records[0].display_text
+    assert "chunk_key" not in nodes[0]
 
     # 第 4 次请求 (下标 3) 才带上检索结果, 用它核对交给模型的字段
     payload = tool_payload(client, 3, "call_search_1")

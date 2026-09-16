@@ -1,0 +1,498 @@
+/* 工作台样式: 平面, 细边框, 小圆角.
+ *
+ * 风格约定 (2026-09-16 明确): 深色平面风, 不用渐变, 不用投影, 圆角一律 4px;
+ * 用 1px 边框与留白划分层级, 强调色只用在主按钮与焦点上. 所有区域都可换行,
+ * 长文件名/错误消息不会把布局撑破 (方案 8.3).
+ */
+
+:root {
+  color-scheme: dark;
+  --bg: #0b0b0d;
+  --panel: #101013;
+  --raised: #16161a;
+  --border: #26262c;
+  --text: #e9e9ec;
+  --muted: #9a9aa3;
+  --accent: #5b6cff;
+  --accent-ink: #ffffff;
+  --ok: #4cc38a;
+  --warn: #e2b714;
+  --danger: #ff6369;
+  --radius: 4px;
+  --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.55 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-weight: 600;
+}
+
+p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+ul,
+ol,
+dl {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+code,
+.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  height: 48px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.brand {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* 窄屏时用户名先收缩 (截断加省略号), 按钮文字不许换行: 360px 下"退出"不会变成两行. */
+#current-user {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar .button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.grow {
+  flex: 1 1 auto;
+}
+
+.shell {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 14px;
+}
+
+.panel + .panel {
+  margin-top: 12px;
+}
+
+.section-title {
+  font-size: 13px;
+  text-transform: none;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12px;
+}
+
+.title {
+  font-size: 18px;
+  margin-bottom: 6px;
+}
+
+.login {
+  max-width: 360px;
+  margin: 48px auto;
+}
+
+.form {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  padding: 7px 9px;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+.history-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.button {
+  padding: 7px 12px;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  border-color: #3a3a44;
+}
+
+.button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.button.primary {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.form .button {
+  margin-top: 6px;
+  justify-self: start;
+}
+
+.error {
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow-wrap: anywhere;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.main-column {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+/* 宽屏: 主区域分两栏 (材料与请求 / 运行状态 一栏, 轮次与报告一栏).
+ * 窄屏按 DOM 顺序堆叠: 材料, 状态, 轮次, 报告 (方案 8.1). */
+@media (min-width: 1000px) {
+  .main-column {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+    align-items: start;
+  }
+}
+
+.main-left,
+.main-right {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+#history-panel {
+  position: sticky;
+  top: 64px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+}
+
+.history {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.history-item {
+  width: 100%;
+  text-align: left;
+  padding: 8px 9px;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  cursor: pointer;
+}
+
+.history-item[aria-current="true"] {
+  border-color: var(--accent);
+}
+
+.history-item .name,
+.facts dd,
+.report .line,
+.rounds .line {
+  overflow-wrap: anywhere;
+}
+
+.history-item .meta {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.badge.ok {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.badge.warn {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.badge.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.facts {
+  display: grid;
+  gap: 6px;
+}
+
+.facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.facts dd {
+  margin: 0;
+}
+
+.rounds,
+.report {
+  display: grid;
+  gap: 10px;
+}
+
+.round {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: var(--raised);
+}
+
+.round .head {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.finding {
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: var(--raised);
+}
+
+.finding .summary {
+  margin-bottom: 6px;
+}
+
+.finding .line {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.finding .sources {
+  margin-top: 6px;
+  display: grid;
+  gap: 2px;
+}
+
+.note {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 9px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.warn-text {
+  color: var(--warn);
+}
+
+/* 动作区: 补充 / 反馈 / 重跑, 由服务端的 allowed_actions 决定显示哪些 */
+
+.actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.button.small-button {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+/* 材料来源: 用户补充直接显示原文, 材料定位给一个打开 PDF 的按钮 */
+
+.source-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.quote {
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+  color: var(--text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* 制度引用: 展开显示标题, 定位与本次保存的原文 (原生 details, 键盘可用) */
+
+.citations {
+  margin-top: 8px;
+}
+
+.citation {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  margin-top: 4px;
+  background: var(--panel);
+}
+
+.citation summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.citation[open] summary {
+  margin-bottom: 6px;
+}
+
+/* 工具轨迹 */
+
+.trace {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.trace-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  background: var(--raised);
+}
+
+.trace-item.failed {
+  border-color: var(--danger);
+}
+
+.trace-item summary {
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.text-block {
+  margin: 6px 0 0;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 260px;
+  overflow: auto;
+}
+
+@media (max-width: 720px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #history-panel {
+    position: static;
+    max-height: none;
+  }
+
+  .topbar {
+    padding: 0 12px;
+  }
+
+  .shell {
+    padding: 12px;
+  }
+}
+
+/* HTML 的 hidden 属性必须压过布局用的 display (例如 .app 的 grid):
+ * 这个规则放在最后, 同优先级时后出现的生效, 否则未登录也会看到主区域. */
+[hidden] {
+  display: none;
+}

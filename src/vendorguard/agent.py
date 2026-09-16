@@ -927,6 +927,19 @@ def run_review(
                             "as_of": POLICY_AS_OF.isoformat(),
                             "scope": list(CURRENT_EDITION_KEYS),
                             "returned_nodes": [item.node_key for item in results],
+                            # 本次真实返回的条款原文: 页面要展开制度引用时必须看得到标题,
+                            # 定位与原文, 而且只能在这次运行保存的证据里看 (M4 方案 4.5),
+                            # 所以原文直接进事件. chunk_key 是召回编号, 不进这里.
+                            "nodes": [
+                                {
+                                    "node_key": item.node_key,
+                                    "edition_key": item.edition_key,
+                                    "title": item.locator_path[0],
+                                    "locator": list(item.locator_path),
+                                    "text": item.display_text,
+                                }
+                                for item in results
+                            ],
                         },
                         "arguments": call.function.arguments,
                     }

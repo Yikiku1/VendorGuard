@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VendorGuard 审查工作台</title>
+<link rel="stylesheet" href="/assets/workbench/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <span class="brand">VendorGuard</span>
+  <span id="current-user" class="muted" aria-live="polite"></span>
+  <span class="grow"></span>
+  <button type="button" id="logout-button" class="button" hidden>退出</button>
+</header>
+
+<main class="shell">
+  <p id="error-line" class="error" role="alert" hidden></p>
+
+  <section id="login-view" class="panel login">
+    <h1 class="title">登录</h1>
+    <p class="muted">用演示账号登录后即可提交材料并查看初审报告。</p>
+    <form id="login-form" class="form">
+      <label for="username">账号</label>
+      <input id="username" name="username" autocomplete="username" required>
+      <label for="password">密码</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit" id="login-submit" class="button primary">登录</button>
+    </form>
+  </section>
+
+  <section id="app-view" class="app" hidden>
+    <aside id="history-panel" class="panel">
+      <h2 class="section-title">最近审查</h2>
+      <p id="history-state" class="muted" aria-live="polite">尚未加载。</p>
+      <ul id="history-list" class="history"></ul>
+    </aside>
+
+    <div class="main-column">
+      <div class="main-left">
+        <section class="panel">
+          <h2 class="section-title">新建审查</h2>
+          <form id="review-form" class="form">
+            <label for="material-file">材料 PDF</label>
+            <input id="material-file" name="material" type="file" accept="application/pdf,.pdf" required>
+            <label for="request-text">审查要求</label>
+            <textarea id="request-text" name="request_text" rows="3" maxlength="1000" required></textarea>
+            <label for="reference-date">参考日期</label>
+            <input id="reference-date" name="reference_date" type="date" value="2026-09-01" required>
+            <button type="submit" id="review-submit" class="button primary">开始审查</button>
+          </form>
+        </section>
+
+        <section class="panel">
+          <h2 class="section-title">运行状态</h2>
+          <p id="status-line" class="muted" aria-live="polite">尚未选择记录。</p>
+          <p id="action-hint" class="muted small" hidden></p>
+          <p id="feedback-note" class="muted small" hidden></p>
+
+          <div id="action-area" class="actions" hidden>
+            <form id="supplement-form" class="form" hidden>
+              <label for="supplement-text">补充材料信息 (只能补充一次)</label>
+              <textarea id="supplement-text" name="supplement_text" rows="2" maxlength="2000" required></textarea>
+              <button type="submit" id="supplement-submit" class="button primary">提交补充并重新审查</button>
+            </form>
+
+            <form id="feedback-form" class="form" hidden>
+              <label for="feedback-comment">报告反馈备注 (可选)</label>
+              <input id="feedback-comment" name="feedback_comment" maxlength="1000">
+              <div class="button-row">
+                <button type="button" id="feedback-confirm" class="button">确认报告</button>
+                <button type="button" id="feedback-recheck" class="button">要求重查</button>
+              </div>
+              <p class="muted small">反馈只表示你看过并接受了这份报告, 不会调用准入审批, 也不改案件或供应商状态。</p>
+            </form>
+
+            <div class="button-row">
+              <button type="button" id="rerun-button" class="button" hidden>用原记录重跑</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="section-title">材料与请求</h2>
+          <dl id="material-facts" class="facts"></dl>
+        </section>
+      </div>
+
+      <div class="main-right">
+        <section class="panel">
+          <h2 class="section-title">运行轮次</h2>
+          <div id="rounds-area" class="rounds">
+            <p class="muted small">尚未选择记录。</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="section-title">结构化报告</h2>
+          <div id="report-area" class="report">
+            <p class="muted small">尚未选择记录。</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="section-title">工具轨迹</h2>
+          <p class="muted small">按发生顺序显示本次运行真实发生的工具调用; 出错的那一步会自动展开。</p>
+          <ol id="trace-list" class="trace">
+            <li class="muted small">尚未选择记录。</li>
+          </ol>
+        </section>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="/assets/workbench/app.js"></script>
+</body>
+</html>
