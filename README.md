@@ -1,124 +1,191 @@
 # VendorGuard
 
-供应商材料审查 Agent：提交一份材料，Agent 读取、核对来源、执行准入规则、检索现行内部制度，
-缺信息时追问，最后只交付**带引用的结构化初审报告**，由用户确认或要求重查。
+面向供应商准入场景的材料审查 Agent。用户上传一份供应商材料后，系统完成 PDF 读取、
+事实与来源核对、确定性规则检查、现行制度检索和缺失信息追问，最终交付一份可回查原文的
+结构化初审报告。
 
-面向 AI Agent / AI 应用开发的求职演示项目；产品取舍见 [PRD](project_docs/VendorGuard-PRD.md)。
+项目用于展示 AI Agent / AI 应用工程能力。它不让大模型直接决定供应商是否准入：模型负责
+选择工具和组织解释，规则计算、来源校验、引用放行、状态转换和失败处理由程序控制。
 
-## 当前状态（M4：可独立演示的审查工作台）
-
-M4 已完成：同一条审查链路现在有两个入口——命令行和一个**受认证的单页工作台**。
+## 30 秒了解项目
 
 ```text
-登录 -> 上传文本 PDF + 填写审查要求 -> 页面显示"审查中"
-     -> Agent 读取材料 / 校验事实 / 检索制度 -> 追问时页面补充一次 -> 第二轮
-     -> 结构化报告: 每条发现的事实、规则结果、材料来源(定位到 PDF 页码)与制度引用(展开原文)
-     -> 确认报告 / 要求重查 -> 可创建关联的新运行, 旧失败与旧记录保持不变
+登录 -> 上传文本 PDF + 审查要求
+     -> 读取材料并定位页码
+     -> 提取事实并核对原文
+     -> 执行确定性准入规则
+     -> 检索指定日期下的现行制度
+     -> 缺信息时追问一次并重新执行完整链路
+     -> 输出带材料来源和制度原文的初审报告
+     -> 用户确认、要求重查或基于失败记录发起关联重跑
 ```
 
-工作台是原生 HTML/CSS/JS（无前端工程、无 CDN），Token 只放 `sessionStorage`；
-界面是深色 / 亮色两套**平面**配色（1px 边框、4px 圆角，没有渐变和投影），默认跟随系统偏好，
-顶栏按钮可手动切换（选择记在浏览器本地）；
-所有按钮按服务端算出的 `allowed_actions` 显示，前端不复制状态转换规则；
-记录存在本地忽略目录 `var/reviews/`（**演示证据，不是业务案件**：不接 `admission_cases`、
-不调用人工准入决定接口、不修改案件或供应商状态）。
+当前交付包括命令行入口和受认证的单页工作台。工作台支持审查历史、材料回看、制度引用展开、
+工具轨迹、一次补充、报告反馈和失败重跑。报告是审查证据，不是准入决定；确认或重查都不会
+修改供应商、案件或合格供应商清单状态。
 
-## 环境准备
+## 核心设计
 
-- Python 3.13 + [uv](https://docs.astral.sh/uv/)；
-- Docker（数据库用 `compose.yaml` 里的 PostgreSQL 容器，另需 pgvector 扩展，镜像已固定）；
-- 复制 `.env.example` 为 `.env` 并填好：数据库密码、JWT 密钥、演示账号密码、模型配置。
+### 1. Agent 负责不确定判断，程序守住业务边界
 
-**模型费用来源**：Agent 与 embedding 都走**阿里云百炼**的 OpenAI 兼容端点（`VENDORGUARD_LLM_*`、
-`VENDORGUARD_EMBEDDING_*`），费用由使用者自己承担。正文向量有本地缓存
-（`data/retrieval/cache/`，gitignore）：**缓存缺失时首次启动会调用付费 embedding 接口**建立缓存，
-之后按"模型名 + 正文指纹"复用；查询向量每次现算（很便宜），不进缓存。
+- `read_material`、`check_materials`、`search_policy` 是业务工具；`ask_user` 和
+  `submit_report` 是唯一追问与结论出口，纯文本不能直接结束审查。
+- 日期有效性、材料完整性和规则命中由普通 Python 代码计算，不接受模型自行生成状态枚举。
+- 工具白名单、调用预算、参数 Schema、超时和纠正次数由循环统一控制，预算耗尽时明确失败。
+- 报告不得宣告准入批准；引用必须来自本次检索实际返回的节点，否则拒绝提交并要求模型改写。
 
-演示账号由种子命令幂等创建（只补缺失的，已存在的原样不动）：
+### 2. 来源可以回到材料页和制度原文
+
+- PDF 按页提取文本，事实必须在声明的材料来源中命中；用户补充与原始材料分开记录。
+- 制度解析保留章节、表格行、版本、生效日期和原文定位，检索前先过滤非现行版本。
+- 页面展开的是运行时保存的制度原文，不会在查看历史记录时重新检索并改变证据。
+- 检索失败、依据不足和业务规则未通过是三种不同状态，不互相冒充。
+
+### 3. 失败可复现，重跑不覆盖历史
+
+- 每轮保存脱敏后的工具参数、结果摘要、错误码、模型请求次数、Token 与耗时。
+- 可重试失败会创建新的 `review_id`，并用 `retry_of_review_id` 关联原记录；旧失败记录保持不变。
+- 扫描件在材料层直接拒绝，不发模型请求，也不会被标记为可重试的模型失败。
+- 页面按钮来自服务端计算的 `allowed_actions`，前端不复制状态转换规则。
+
+### 4. HTTP 与 CLI 复用同一条审查链路
+
+- FastAPI 应用和 CLI 共用 `ReviewCommand`、`ReviewRuntime` 与同一个 `run_review()` 工具循环。
+- HTTP 层使用 Bearer Token 认证，并按 `owner_user_id` 隔离审查记录；跨用户访问统一返回 404。
+- 同一记录的更新在进程内串行化，JSON 使用同目录临时文件加 `os.replace` 原子替换。
+- 工作台使用原生 HTML/CSS/JS，不依赖 CDN；Token 只保存在当前标签页的 `sessionStorage`。
+
+## 技术栈
+
+- **Agent / LLM**：OpenAI SDK 兼容接口、Function Calling、Pydantic v2、结构化输出
+- **检索**：版本过滤、Embedding、精确余弦 Top-K、引用闸门、冻结评测集
+- **后端**：Python 3.13、FastAPI、SQLAlchemy 2.0 Async、PostgreSQL、pgvector、Alembic
+- **工程**：pytest、Ruff、mypy strict、uv、Docker Compose
+- **前端**：原生 HTML/CSS/JavaScript
+
+## 快速启动
+
+### 环境要求
+
+- Python 3.13 和 [uv](https://docs.astral.sh/uv/)
+- Docker
+- 阿里云百炼 OpenAI 兼容模型与 Embedding 配置
+
+复制 `.env.example` 为 `.env`，填写数据库密码、JWT 密钥、演示账号密码和模型配置。Agent 与
+Embedding 调用费用由使用者承担。正文向量缓存在忽略目录 `data/retrieval/cache/`；缓存缺失时，
+首次启动会调用 Embedding 接口构建缓存。
 
 ```powershell
-uv run --no-sync python -m vendorguard.seed
-```
+# 安装锁定依赖
+uv sync --frozen
 
-## 启动
-
-```powershell
-# 1) 数据库 (首次或重启机器后)
+# 启动 PostgreSQL + pgvector
 docker compose up -d database
 
-# 2) 应用 (启动时装载规则与检索数据; 片段清单缺失/缓存损坏/模型配置缺失会直接启动失败)
+# 幂等创建演示账号
+uv run --no-sync python -m vendorguard.seed
+
+# 启动应用
 uv run --no-sync uvicorn vendorguard.app:create_app --factory
 ```
 
-浏览器打开 <http://127.0.0.1:8000/workbench>，用 `.env` 里的演示账号登录
-（`demo.specialist` 采购专员 / `demo.manager` 采购经理）；另有一个演示与开发用的管理员账号
-`admin`，口令由 `VENDORGUARD_DEMO_ADMIN_PASSWORD` 决定，**不配置时沿用 `demo.specialist` 的口令**。
+浏览器打开 <http://127.0.0.1:8000/workbench>，使用 `.env` 中配置的演示账号登录。默认提供
+`demo.specialist`、`demo.manager` 和 `admin` 三种演示身份；账号只用于本地演示，对外环境必须
+更换口令。
 
-> 演示账号只用于本机演示：任何对外环境都必须换成强口令，并且不要复用这里的示例账号。
-
-**五分钟演示**（从登录到来源核对、失败重跑与边界说明，含每一步的预期结果）见
-[演示脚本](project_docs/VendorGuard-五分钟演示.md)。
-
-命令行入口仍然可用（同一套应用层与同一个 Agent 循环）：
+命令行入口使用同一套应用层和 Agent 循环：
 
 ```powershell
-uv run --no-sync python -m vendorguard.agent data/demo/materials/license_complete.pdf "请检查这家供应商的材料"
+uv run --no-sync python -m vendorguard.agent `
+  data/demo/materials/license_complete.pdf `
+  "请检查这家供应商的材料"
 ```
 
-## 样例材料（自制演示件，不是真实证照）
+## 演示材料与路径
 
-| 文件 | 用途 |
+| 材料 | 演示目标 | 预期结果 |
+| --- | --- | --- |
+| `license_complete.pdf` | 完整材料 | 生成带材料页码与制度引用的报告 |
+| `license_missing_date.pdf` | 缺有效期 | 追问一次，补充后重新读取、校验和检索 |
+| `license_scanned.pdf` | 扫描件 | 材料层拒绝，模型调用次数为 0 |
+
+完整现场演示步骤见 [五分钟演示脚本](project_docs/VendorGuard-五分钟演示.md)。脚本覆盖登录、
+正常报告、缺项补充、依据不足、失败记录和关联重跑。
+
+## 已验证结果
+
+### 当前现场检查
+
+| 检查项 | 结果 |
 | --- | --- |
-| `data/demo/materials/license_complete.pdf` | 完整材料：有效期与清单齐全，正常出具报告 |
-| `data/demo/materials/license_missing_date.pdf` | 缺有效期截止日：Agent 追问 → 补充一次 → 第二轮 |
-| `data/demo/materials/license_scanned.pdf` | 扫描件：材料层直接拒绝，**不发模型请求**（不做 OCR） |
+| 单元测试 | `384 passed` |
+| Ruff | 通过 |
+| Ruff format check | 通过 |
+| mypy strict | 通过 |
 
-## 真实验收（2026-09-16，模型 `qwen3.8-max`，全部从页面操作）
+### M4 收尾验收
 
-本轮六条本地记录（`var/reviews/`，gitignore，不进公开仓库）：
+2026-09-16 使用 `qwen3.8-max` 从页面完成六条真实运行记录：
 
 | 路径 | 结果 |
 | --- | --- |
-| 完整材料 | `completed`，1 轮（4 次模型请求）：2 条发现，制度引用 4 条取自本次检索 |
-| 缺有效期 → 补充 | `completed`，**2 轮**（追问 3 次请求 + 报告 4 次请求）：第二轮重新读取、重新校验、重新检索；补充来源显示原文，材料来源定位第 2 页 |
-| 无依据请求（环保检测报告） | `completed`：模型检索现行制度后写明"缺少支持该结论的制度依据"，不硬答 |
-| 扫描件 | `failed`，**0 轮**：`material_scanned_unsupported`，未发模型请求，不提供重跑 |
-| 模型端点不可达（真实基础设施失败） | `failed`，1 轮：`agent_run_failed`，1 次模型请求、0 次工具调用，标记可重跑 |
-| 对上一条点"用原记录重跑" | `completed`：新 `review_id` + `retry_of_review_id`，旧失败记录保持不变 |
+| 完整材料 | `completed`，1 轮，2 条发现，4 条制度引用 |
+| 缺有效期 -> 补充 | `completed`，保留 2 轮，第二轮重新读取、校验和检索 |
+| 无依据请求 | `completed`，明确返回依据不足，不硬答 |
+| 扫描件 | `failed`，0 轮，未发模型请求 |
+| 模型端点不可达 | `failed`，保留真实基础设施错误并允许重跑 |
+| 关联重跑 | 新记录成功，旧失败记录不变 |
 
-模型行为有波动：上表是按**实际跑到的结果**记录的，不代表每次都成功；历史记录里
-`qwen3.7-flash` 曾在"缺字段追问"案例上连续失败，本项目的应对是如实记录、不用一次成功冒充稳定性。
+M4 收尾时完整集成测试为 `113 passed`。这是历史验收结果，不冒充本次现场重跑；模型输出也存在
+方差，单次成功不代表跨模型或跨运行稳定。
 
-## 实际限制（如实列出）
+### 制度检索评测
 
-- **评测范围**：制度检索只用 PRD 选定的 8 题评测（正常题 3/3、需纠正前提题 2/2、非现行版本命中 0）；
-  其余 7 题明确未覆盖，三道 `no_answer` 题仍需人工核对。**不能写成"8/8 全自动正确"**。
-- **可复现性绑定缓存**：embedding 服务端输出不是逐分量确定的，同一批正文两次构建的向量有 1e-4 级差异，
-  所以"同一查询的 Top-5 可复现"只对**固定的缓存文件**成立（结果 JSON 里记了 `cache_key`）。
-- **措辞检查是黑名单兜底**：拦"准入批准/已写入"这类宣告，可能误伤免责表述，也可能漏掉改头换面的说法；
-  真正的保证是结构字段核对与固定案例人工复核。
-- **初审报告不是准入决定**：报告确认只表示用户看过并接受这份报告，要求重查只记录反馈；
-  两者都不调用准入审批、不改案件状态、不更新合格供应商清单。
-- **本地记录是演示证据**：单进程、单 worker 的文件存储；多进程锁、共享存储、多租户、对象存储、
-  在线部署都不在本阶段范围内。
-- **不做 OCR**：扫描件在材料层被拒绝；也不做多文件上传、长期多轮对话（只支持一次补充）、
-  历史制度回放或外部法规检索。
+当前检索评测选取冻结数据集中的 8 题：
 
-## 测试与检查
+- 3 道正常题的必需依据全部进入 Top-5；
+- 2 道需要纠正前提的边界题全部命中内部制度依据；
+- 非现行禁用版本命中数为 0；
+- 3 道 `no_answer` 题仍需人工核对语义支持关系。
+
+因此本项目不宣称“8/8 全自动正确”。结果文件位于
+`data/evals/rag_phase1_m3_8q_result.json`，其中保留每题 Top-5、版本信息和人工核对项。
+
+## 运行检查
 
 ```powershell
-uv run --no-sync pytest -q -p no:cacheprovider tests/unit          # 单测, 不需要数据库
+uv run --no-sync pytest -q -p no:cacheprovider tests/unit
 docker compose up -d database
-uv run --no-sync pytest -q -p no:cacheprovider tests/integration   # 集成测试, 需要数据库
+uv run --no-sync pytest -q -p no:cacheprovider tests/integration
 uv run --no-sync ruff check src tests
 uv run --no-sync ruff format --check src tests
 uv run --no-sync mypy
 ```
 
-当前基线：单测 382 通过、集成测试 113 通过，Ruff / 格式检查 / mypy 全绿。
+## 当前边界
 
-## 文档导航
+- 只支持文本型 PDF；扫描件不做 OCR，也不支持多文件材料包。
+- 补充只允许一次，不提供长期多轮对话。
+- Embedding 服务端输出存在微小数值波动，Top-5 可复现性绑定冻结缓存。
+- 依据不足由结构化报告显式表达，但 `no_answer` 的语义支持关系仍需固定案例人工核对。
+- 审查记录保存在本地忽略目录 `var/reviews/`，固定单进程、单 worker；不承诺多进程共享存储。
+- 不提供在线部署、多租户、对象存储、后台队列、SSE/WebSocket 或生产 SLA。
+- 初审报告不会调用准入审批，不修改案件状态，也不更新合格供应商清单。
 
-- 开发顺序与完成标准：[Agent 开发计划](project_docs/VendorGuard-Agent开发计划.md)；当前代码事实见 [PROJECT_CONTEXT](PROJECT_CONTEXT.md)。
-- 本阶段方案与边界：[M4 实施方案](project_docs/VendorGuard-M4实施方案.md)。
-- 历史阶段：[M1](project_docs/VendorGuard-M1实施方案.md)、[M2](project_docs/VendorGuard-M2实施方案.md)、[M3](project_docs/VendorGuard-M3实施方案.md)。
+## 目录导航
+
+```text
+src/vendorguard/          Agent、材料处理、规则、检索、HTTP 与工作台
+tests/unit/               无外部服务的单元测试
+tests/integration/        PostgreSQL、认证、HTTP 与工作台集成测试
+data/demo/                自制演示材料与事实样例
+data/knowledge/           版本化制度语料与快照
+data/evals/               冻结评测集和结果
+policies/                 确定性业务规则
+project_docs/             PRD、阶段方案、状态字典和演示脚本
+```
+
+- 当前代码事实：[PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)
+- 产品范围与边界：[VendorGuard-PRD.md](project_docs/VendorGuard-PRD.md)
+- Agent 开发记录：[VendorGuard-Agent开发计划.md](project_docs/VendorGuard-Agent开发计划.md)
+- M4 工作台方案：[VendorGuard-M4实施方案.md](project_docs/VendorGuard-M4实施方案.md)
