@@ -1,5 +1,7 @@
 # VendorGuard
 
+[![CI](https://github.com/Yikiku1/VendorGuard/actions/workflows/ci.yml/badge.svg)](https://github.com/Yikiku1/VendorGuard/actions/workflows/ci.yml)
+
 面向供应商准入场景的材料审查 Agent。用户上传一份供应商材料后，系统完成 PDF 读取、
 事实与来源核对、确定性规则检查、现行制度检索和缺失信息追问，最终交付一份可回查原文的
 结构化初审报告。
@@ -24,6 +26,8 @@
 工具轨迹、一次补充、报告反馈和失败重跑。报告是审查证据，不是准入决定；确认或重查都不会
 修改供应商、案件或合格供应商清单状态。
 
+![VendorGuard 审查工作台总览](project_docs/assets/workbench-overview.png)
+
 ## 核心设计
 
 ### 1. Agent 负责不确定判断，程序守住业务边界
@@ -40,6 +44,8 @@
 - 制度解析保留章节、表格行、版本、生效日期和原文定位，检索前先过滤非现行版本。
 - 页面展开的是运行时保存的制度原文，不会在查看历史记录时重新检索并改变证据。
 - 检索失败、依据不足和业务规则未通过是三种不同状态，不互相冒充。
+
+![材料来源、规则结果与制度原文](project_docs/assets/workbench-evidence.png)
 
 ### 3. 失败可复现，重跑不覆盖历史
 
@@ -111,6 +117,15 @@ uv run --no-sync python -m vendorguard.agent `
 
 完整现场演示步骤见 [五分钟演示脚本](project_docs/VendorGuard-五分钟演示.md)。脚本覆盖登录、
 正常报告、缺项补充、依据不足、失败记录和关联重跑。
+
+[观看 2 分钟工作台演示（WebM，无声）](project_docs/assets/vendorguard-demo.webm)
+
+<details>
+<summary>查看窄屏工作台截图</summary>
+
+![VendorGuard 窄屏工作台](project_docs/assets/workbench-mobile.png)
+
+</details>
 
 ## 已验证结果
 
