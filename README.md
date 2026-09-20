@@ -182,10 +182,11 @@ data/demo/                自制演示材料与事实样例
 data/knowledge/           版本化制度语料与快照
 data/evals/               冻结评测集和结果
 policies/                 确定性业务规则
-project_docs/             PRD、阶段方案、状态字典和演示脚本
+project_docs/             PRD、状态字典、语料来源核验和演示脚本
 ```
 
 - 当前代码事实：[PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)
 - 产品范围与边界：[VendorGuard-PRD.md](project_docs/VendorGuard-PRD.md)
-- Agent 开发记录：[VendorGuard-Agent开发计划.md](project_docs/VendorGuard-Agent开发计划.md)
-- M4 工作台方案：[VendorGuard-M4实施方案.md](project_docs/VendorGuard-M4实施方案.md)
+- 领域状态定义：[VendorGuard-状态数据字典.md](project_docs/VendorGuard-状态数据字典.md)
+- 语料来源核验：[VendorGuard-RAG一期官方语料来源核验.md](project_docs/VendorGuard-RAG一期官方语料来源核验.md)
+- 现场演示步骤：[VendorGuard-五分钟演示.md](project_docs/VendorGuard-五分钟演示.md)
