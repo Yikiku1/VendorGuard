@@ -31,6 +31,7 @@ _TARGET_DIR = Path("data/demo/materials")
 _DEMO_REGISTRY = "演示市场监督管理局"
 _COMPLETE_SUPPLIER = ("91310000MA1DEMO001", "演示供应商有限公司", "张演示")
 _MISSING_DATE_SUPPLIER = ("91310000MA1DEMO002", "演示宏远部件有限公司", "李演示")
+_PACKAGE_SUPPLIER = ("91310000MA1DEMO003", "演示恒达工业部件有限公司", "王演示")
 
 # 清单状态的写法是程序核对布尔值的唯一依据: 不从勾选框外观推断,
 # 也不允许模型只凭"页码存在"宣布清单齐全.
@@ -110,6 +111,44 @@ def _write_complete(path: Path) -> None:
     )
 
 
+def _write_supplier_admission_package(path: Path) -> None:
+    """成功闭环样例: 申请信息、营业执照字段与品类材料清单位于同一份 PDF。"""
+
+    registration_id, company, legal_person = _PACKAGE_SUPPLIER
+    _write_lines(
+        path,
+        [
+            [
+                "供应商准入材料包(演示样例, 非真实材料)",
+                "申请编号: VG-DEMO-2026-001",
+                "",
+                "一、供应商准入申请表",
+                f"供应商名称: {company}",
+                f"统一社会信用代码: {registration_id}",
+                "供应商品类: standard_components(普通工业部件)",
+                "申请日期: 2026-09-01",
+                "申请人声明: 不存在被黑名单制度限制合作的记录",
+                "",
+                "二、营业执照信息",
+                f"统一社会信用代码: {registration_id}",
+                f"企业名称: {company}",
+                f"法定代表人: {legal_person}",
+                f"登记机关: {_DEMO_REGISTRY}",
+                "声明有效期至: 2027-08-31",
+                "营业执照字段与申请表一致: 是",
+                "",
+                "三、已提交材料清单",
+                "  营业执照",
+                "  报价单",
+                "  交付记录",
+                _CHECKLIST_COMPLETE,
+                "",
+                "说明: 本文件为 VendorGuard 教学演示材料, 不对应任何真实企业或证照。",
+            ]
+        ],
+    )
+
+
 def _write_missing_date(path: Path) -> None:
     """缺日期样例: 第 1 页没有声明有效期, 第 2 页清单状态齐全.
 
@@ -132,6 +171,7 @@ def main() -> None:
     _TARGET_DIR.mkdir(parents=True, exist_ok=True)
 
     builders = {
+        "admission_package.pdf": _write_supplier_admission_package,
         "license_complete.pdf": _write_complete,
         "license_missing_date.pdf": _write_missing_date,
         "license_scanned.pdf": _write_scanned,

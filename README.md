@@ -103,15 +103,16 @@ uv run --no-sync uvicorn vendorguard.app:create_app --factory
 
 ```powershell
 uv run --no-sync python -m vendorguard.agent `
-  data/demo/materials/license_complete.pdf `
-  "请检查这家供应商的材料"
+  data/demo/materials/admission_package.pdf `
+  "请核对营业执照有效期和普通工业部件品类材料清单齐备性"
 ```
 
 ## 演示材料与路径
 
 | 材料 | 演示目标 | 预期结果 |
 | --- | --- | --- |
-| `license_complete.pdf` | 完整材料 | 生成带材料页码与制度引用的报告 |
+| `admission_package.pdf` | 成功主路径 | 两条规则均未命中，生成带材料页码与制度原文的报告 |
+| `license_complete.pdf` | 仅执照与清单 | 展示材料事实可核对，但不冒充完整准入申请 |
 | `license_missing_date.pdf` | 缺有效期 | 追问一次，补充后重新读取、校验和检索 |
 | `license_scanned.pdf` | 扫描件 | 材料层拒绝，模型调用次数为 0 |
 
@@ -134,9 +135,11 @@ uv run --no-sync python -m vendorguard.agent `
 | 检查项 | 结果 |
 | --- | --- |
 | 单元测试 | `384 passed` |
+| 工作台集成测试 | `19 passed` |
 | Ruff | 通过 |
 | Ruff format check | 通过 |
 | mypy strict | 通过 |
+| 成功主路径 | `completed`，1 轮，2 条发现，`VEN-001/002=not_hit`，`insufficient_evidence=false` |
 
 ### M4 收尾验收
 
